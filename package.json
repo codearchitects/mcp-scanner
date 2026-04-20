@@ -1,0 +1,67 @@
+{
+  "name": "mcp-scanner",
+  "version": "1.0.0",
+  "description": "Scan TypeScript projects for @ExposeTool decorated methods and generate VS Code languageModelTools entries in package.json",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "mcp-scanner": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./vscode": {
+      "types": "./dist/vscode/index.d.ts",
+      "default": "./dist/vscode/index.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "vscode": [
+        "dist/vscode/index.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "prepublishOnly": "npm run build",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "mcp",
+    "vscode",
+    "language-model-tool",
+    "typescript",
+    "scanner",
+    "decorator",
+    "copilot"
+  ],
+  "author": "Code Architects",
+  "license": "MIT",
+  "dependencies": {
+    "reflect-metadata": "^0.2.2"
+  },
+  "peerDependencies": {
+    "typescript": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": false
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.96.0",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
