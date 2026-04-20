@@ -1,5 +1,5 @@
 {
-  "name": "mcp-scanner",
+  "name": "@codearchitects/mcp-scanner",
   "version": "1.0.0",
   "description": "Scan TypeScript projects for @ExposeTool decorated methods and generate VS Code languageModelTools entries in package.json",
   "main": "dist/index.js",

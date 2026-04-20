@@ -1,4 +1,4 @@
-# mcp-scanner
+# @codearchitects/mcp-scanner
 
 Scan TypeScript projects for `@ExposeTool` decorated methods and automatically generate VS Code `contributes.languageModelTools` entries in `package.json`.
 
@@ -6,10 +6,10 @@ Scan TypeScript projects for `@ExposeTool` decorated methods and automatically g
 
 ```bash
 # Global (provides `mcp-scanner` CLI)
-npm install -g mcp-scanner
+npm install -g @codearchitects/mcp-scanner
 
 # As a project dependency
-npm install mcp-scanner
+npm install @codearchitects/mcp-scanner
 ```
 
 ## Quick Start
@@ -17,7 +17,7 @@ npm install mcp-scanner
 ### 1. Decorate your methods
 
 ```typescript
-import { ExposeTool } from 'mcp-scanner';
+import { ExposeTool } from '@codearchitects/mcp-scanner';
 
 interface IGreetParams {
   /** The user's name. */
@@ -91,7 +91,7 @@ If legacy marker strings are present (`____AUTOGEN_TOOLS_START____` / `____AUTOG
 In your VS Code extension, register the Language Model Tool so users can invoke it from Copilot Chat:
 
 ```typescript
-import { registerScanProjectToolsLmTool } from 'mcp-scanner/vscode';
+import { registerScanProjectToolsLmTool } from '@codearchitects/mcp-scanner/vscode';
 
 export function activate(context: vscode.ExtensionContext) {
   // ... your extension setup ...
