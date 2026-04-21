@@ -9,6 +9,7 @@ on:
         type: choice
         default: patch
         options:
+          - current
           - patch
           - minor
           - major
@@ -48,7 +49,9 @@ jobs:
 
       - name: Bump version
         run: |
-          if [ "${{ inputs.version }}" = "custom" ]; then
+          if [ "${{ inputs.version }}" = "current" ]; then
+            VERSION=$(node -p "require('./package.json').version")
+          elif [ "${{ inputs.version }}" = "custom" ]; then
             if [ -z "${{ inputs.custom_version }}" ]; then
               echo "::error::Custom version is required when version type is 'custom'"
               exit 1
@@ -62,11 +65,18 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Commit version bump
+        if: inputs.version != 'current'
         run: |
           git add package.json package-lock.json
           git commit -m "chore: release v${{ env.VERSION }}"
           git tag "v${{ env.VERSION }}"
           git push origin HEAD --tags
+
+      - name: Tag current version
+        if: inputs.version == 'current'
+        run: |
+          git tag "v${{ env.VERSION }}"
+          git push origin "v${{ env.VERSION }}"
 
       - name: Publish to npm
         run: npm publish --access public
