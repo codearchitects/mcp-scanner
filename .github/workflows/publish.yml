@@ -75,8 +75,8 @@ jobs:
       - name: Tag current version
         if: inputs.version == 'current'
         run: |
-          git tag "v${{ env.VERSION }}"
-          git push origin "v${{ env.VERSION }}"
+          git tag -f "v${{ env.VERSION }}"
+          git push origin "v${{ env.VERSION }}" --force
 
       - name: Publish to npm
         run: npm publish --access public
