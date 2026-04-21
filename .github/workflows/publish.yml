@@ -22,9 +22,11 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: npm
 
     permissions:
       contents: write
+      id-token: write
 
     steps:
       - name: Checkout repository
@@ -79,6 +81,4 @@ jobs:
           git push origin "v${{ env.VERSION }}" --force
 
       - name: Publish to npm
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
