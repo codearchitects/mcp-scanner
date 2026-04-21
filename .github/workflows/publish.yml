@@ -1,0 +1,74 @@
+name: Publish to npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version bump type or exact version (e.g. 1.2.3)"
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+          - custom
+      custom_version:
+        description: "Custom version (only used when version is 'custom', e.g. 1.2.3)"
+        required: false
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        run: |
+          if [ "${{ inputs.version }}" = "custom" ]; then
+            if [ -z "${{ inputs.custom_version }}" ]; then
+              echo "::error::Custom version is required when version type is 'custom'"
+              exit 1
+            fi
+            npm version "${{ inputs.custom_version }}" --no-git-tag-version
+            VERSION="${{ inputs.custom_version }}"
+          else
+            npm version "${{ inputs.version }}" --no-git-tag-version
+            VERSION=$(node -p "require('./package.json').version")
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Commit version bump
+        run: |
+          git add package.json package-lock.json
+          git commit -m "chore: release v${{ env.VERSION }}"
+          git tag "v${{ env.VERSION }}"
+          git push origin HEAD --tags
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
