@@ -50,6 +50,9 @@ mcp-scanner
 # Or with options
 mcp-scanner --project /path/to/project --tsconfig tsconfig.json
 
+# Write to a specific package.json
+mcp-scanner --project /path/to/project --package-json ../apps/vscode-ext/package.json
+
 # Dry run (preview without writing)
 mcp-scanner --dry-run
 ```
@@ -173,6 +176,10 @@ mcp-scanner [options]
 
 --project, -p <path>    Project root (default: cwd)
 --tsconfig, -t <name>   tsconfig file name (default: tsconfig.json)
+--package-json, -j <path>
+                      package.json path to patch.
+                      Relative paths are resolved from --project.
+                      (default: <project>/package.json)
 --extra, -e <path> [tsconfig]
                         Additional project root to scan (repeatable)
 --dry-run, -d           Preview without writing

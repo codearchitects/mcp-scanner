@@ -24,6 +24,7 @@ import { scanProject } from './scanner';
 interface CliArgs {
   projectRoot: string;
   tsconfigName: string;
+  packageJsonPath?: string;
   extraProjects: Array<{ root: string; tsconfig: string }>;
   dryRun: boolean;
   help: boolean;
@@ -33,6 +34,7 @@ function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
     projectRoot: process.cwd(),
     tsconfigName: 'tsconfig.json',
+    packageJsonPath: undefined,
     extraProjects: [],
     dryRun: false,
     help: false,
@@ -48,6 +50,10 @@ function parseArgs(argv: string[]): CliArgs {
       case '--tsconfig':
       case '-t':
         args.tsconfigName = argv[++i] ?? 'tsconfig.json';
+        break;
+      case '--package-json':
+      case '-j':
+        args.packageJsonPath = argv[++i];
         break;
       case '--extra':
       case '-e': {
@@ -98,6 +104,9 @@ Usage:
 Options:
   --project, -p <path>    Project root directory (default: current directory)
   --tsconfig, -t <name>   tsconfig file name for the main project (default: tsconfig.json)
+  --package-json, -j <path>
+                          package.json path to patch. Relative paths are
+                          resolved from --project. (default: <project>/package.json)
   --extra, -e <path> [tsconfig]  Additional project root to scan (repeatable).
                           Scans sources from this project but patches the MAIN
                           project's package.json. Optionally pass a tsconfig
@@ -128,6 +137,9 @@ Multi-project example:
 
   console.log(`\n🔍 mcp-scanner — scanning ${args.projectRoot}`);
   console.log(`   tsconfig: ${args.tsconfigName}`);
+  if (args.packageJsonPath) {
+    console.log(`   package.json: ${args.packageJsonPath}`);
+  }
   if (args.extraProjects.length > 0) {
     for (const extra of args.extraProjects) {
       console.log(`   extra: ${extra.root} (${extra.tsconfig})`);
@@ -178,7 +190,11 @@ Multi-project example:
   }
 
   // Patch package.json
-  const packageJsonPath = path.join(args.projectRoot, 'package.json');
+  const packageJsonPath = args.packageJsonPath
+    ? (path.isAbsolute(args.packageJsonPath)
+      ? args.packageJsonPath
+      : path.resolve(args.projectRoot, args.packageJsonPath))
+    : path.join(args.projectRoot, 'package.json');
   const patchResult = patchPackageJsonFile(packageJsonPath, result.tools);
 
   if (patchResult.ok) {
