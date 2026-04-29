@@ -548,6 +548,7 @@ export function renderProxyFileFromScaffoldTemplate(
     className,
     methods: methods.map((method) => ({
       toolName: method.toolName,
+      toolOptions: method.toolOptions,
       methodName: method.methodName,
       returnTypeText: method.returnTypeText,
       jsDoc: method.jsDoc,

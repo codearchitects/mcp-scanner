@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as ts from 'typescript';
+import type { IExposeToolOptions } from './decorators';
 
 /**
  * Proxy method parameter metadata.
@@ -29,6 +30,12 @@ export interface IProxyMethod {
    * Tool name declared in `@ExposeTool({ name })`.
    */
   toolName: string;
+
+  /**
+   * Complete tool options from `@ExposeTool` for proxy decoration.
+   * Allows partial tool options since not all fields may be present in the source.
+   */
+  toolOptions?: Partial<IExposeToolOptions>;
 
   /**
    * Source method name.
@@ -169,6 +176,31 @@ function getStringProperty(obj: ts.ObjectLiteralExpression, name: string): strin
 
     if (ts.isStringLiteral(prop.initializer)) {
       return prop.initializer.text;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Read boolean property from object literal.
+ *
+ * @param obj Object literal expression.
+ * @param name Property name.
+ * @returns Boolean property value when found.
+ */
+function getBooleanProperty(obj: ts.ObjectLiteralExpression, name: string): boolean | undefined {
+  for (const prop of obj.properties) {
+    if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name) || prop.name.text !== name) {
+      continue;
+    }
+
+    const init = prop.initializer;
+    if (init.kind === ts.SyntaxKind.TrueKeyword) {
+      return true;
+    }
+    if (init.kind === ts.SyntaxKind.FalseKeyword) {
+      return false;
     }
   }
 
@@ -565,12 +597,26 @@ export function scanProjectForProxies(
               continue;
             }
 
+            const displayName = getStringProperty(argsObj, 'displayName');
+            const modelDescription = getStringProperty(argsObj, 'modelDescription');
+            const icon = getStringProperty(argsObj, 'icon');
+            const canBeReferencedInPrompt = getBooleanProperty(argsObj, 'canBeReferencedInPrompt');
+
             const methodName = member.name?.getText(sourceFile) ?? 'unnamedMethod';
             const returnTypeText = member.type ? member.type.getText(sourceFile) : 'Promise<unknown>';
             const methodImportData = toMethodImportData(member, importsMap, exportedTypeNames);
 
+            const toolOptions: Partial<IExposeToolOptions> = {
+              name: toolName,
+              ...(displayName && { displayName }),
+              ...(modelDescription && { modelDescription }),
+              ...(icon && { icon }),
+              ...(canBeReferencedInPrompt !== undefined && { canBeReferencedInPrompt }),
+            };
+
             methods.push({
               toolName,
+              toolOptions,
               methodName,
               className,
               sourceFilePath: sourceFile.fileName,
