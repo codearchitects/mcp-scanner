@@ -100,6 +100,183 @@ function isWithinSearchPath(filePath: string, searchPath?: string): boolean {
 /* ------------------------------------------------------------------ */
 
 /**
+ * Convert a TypeScript Type into a JSON Schema for object properties.
+ * Used for resolving imported interfaces and complex types.
+ *
+ * @param type The resolved type.
+ * @param checker Program type checker.
+ * @param visited Circular-reference guard set.
+ * @returns JSON Schema object with expanded properties.
+ */
+function typeToJsonSchemaObject(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  visited: Set<string>,
+): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  const required: string[] = [];
+
+  const props = type.getProperties();
+  for (const prop of props) {
+    const propName = prop.name;
+    
+    // Get the type of this property
+    let propType = checker.getTypeOfSymbolAtLocation(prop, prop.valueDeclaration || (type as any).__location);
+    
+    // Check if optional: if the type includes Undefined, it's optional
+    let isOptional = !!(propType.flags & ts.TypeFlags.Undefined);
+    
+    // Also check the declaration for ?: syntax
+    if (!isOptional && prop.valueDeclaration) {
+      isOptional = !!(prop.valueDeclaration as any).questionToken;
+    }
+
+    // If optional and type is a union with Undefined, extract the non-undefined type
+    let propSchema: Record<string, unknown>;
+    if (isOptional && propType.flags & ts.TypeFlags.Union) {
+      const unionType = propType as ts.UnionType;
+      const nonUndefinedTypes = unionType.types.filter((t) => !(t.flags & ts.TypeFlags.Undefined));
+      
+      if (nonUndefinedTypes.length === 1) {
+        // Optional single type
+        propSchema = typeToJsonSchemaFromType(nonUndefinedTypes[0], checker, visited);
+      } else if (nonUndefinedTypes.length > 1) {
+        // Optional union
+        propSchema = {
+          oneOf: nonUndefinedTypes.map((t) => typeToJsonSchemaFromType(t, checker, visited)),
+        };
+      } else {
+        // Only undefined (shouldn't happen, but handle it)
+        propSchema = { type: 'object' };
+      }
+    } else {
+      // Non-optional or not a union with undefined
+      propSchema = typeToJsonSchemaFromType(propType, checker, visited);
+    }
+
+    // Extract JSDoc description
+    const jsDocComment = prop.getDocumentationComment(checker);
+    if (jsDocComment && jsDocComment.length > 0) {
+      propSchema['description'] = jsDocComment.map((d) => d.text).join('');
+    }
+
+    properties[propName] = propSchema;
+    if (!isOptional) {
+      required.push(propName);
+    }
+  }
+
+  const schema: Record<string, unknown> = { type: 'object', properties };
+  if (required.length > 0) {
+    schema['required'] = required;
+  }
+  return schema;
+}
+
+/**
+ * Convert a resolved Type to JSON Schema.
+ * Handles primitives, arrays, unions, and object types.
+ *
+ * @param type The resolved type.
+ * @param checker Program type checker.
+ * @param visited Circular-reference guard set.
+ * @returns JSON Schema fragment.
+ */
+function typeToJsonSchemaFromType(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  visited: Set<string>,
+): Record<string, unknown> {
+  const typeName = checker.typeToString(type);
+
+  // Circular reference guard
+  if (visited.has(typeName)) {
+    return { type: 'object' };
+  }
+
+  // --- String type ---
+  if (type.flags & ts.TypeFlags.String) {
+    return { type: 'string' };
+  }
+
+  // --- Number type ---
+  if (type.flags & ts.TypeFlags.Number) {
+    return { type: 'number' };
+  }
+
+  // --- Boolean type ---
+  if (type.flags & ts.TypeFlags.Boolean) {
+    return { type: 'boolean' };
+  }
+
+  // --- String literal type ---
+  if (type.flags & ts.TypeFlags.StringLiteral) {
+    const literalType = type as ts.StringLiteralType;
+    return { type: 'string', enum: [literalType.value] };
+  }
+
+  // --- Number literal type ---
+  if (type.flags & ts.TypeFlags.NumberLiteral) {
+    const literalType = type as ts.NumberLiteralType;
+    return { type: 'number', enum: [literalType.value] };
+  }
+
+  // --- Boolean literal type (true | false) ---
+  if (type.flags & ts.TypeFlags.BooleanLiteral) {
+    // Get the boolean value from the intrinsic name
+    const isTrueLiteral = (type as any).intrinsicName === 'true';
+    return { type: 'boolean', enum: [isTrueLiteral] };
+  }
+
+  // --- Union type (includes enums and boolean literals) ---
+  if (type.flags & ts.TypeFlags.Union) {
+    const unionType = type as ts.UnionType;
+
+    // Check if all members are string literals
+    const allStringLiterals = unionType.types.every((t) => t.flags & ts.TypeFlags.StringLiteral);
+    if (allStringLiterals) {
+      return {
+        type: 'string',
+        enum: unionType.types.map((t) => (t as ts.StringLiteralType).value),
+      };
+    }
+
+    // Mixed union
+    return {
+      oneOf: unionType.types.map((t) => typeToJsonSchemaFromType(t, checker, visited)),
+    };
+  }
+
+  // --- Object type (interface, class, type literal, or array) ---
+  if (type.flags & ts.TypeFlags.Object) {
+    visited.add(typeName);
+
+    // Check if this is an array type by examining the symbol name
+    const typeAsObj = type as ts.ObjectType;
+    const typeSymbol = typeAsObj.symbol;
+    
+    if (typeSymbol && (typeSymbol.escapedName === 'Array' || typeSymbol.name === 'Array')) {
+      // It's an array - get the element type from type arguments
+      const typeRef = type as ts.TypeReference;
+      const typeArgs = checker.getTypeArguments(typeRef);
+      if (typeArgs && typeArgs.length > 0) {
+        return {
+          type: 'array',
+          items: typeToJsonSchemaFromType(typeArgs[0], checker, visited),
+        };
+      }
+      return { type: 'array', items: { type: 'object' } };
+    }
+
+    // Regular object - expand properties
+    return typeToJsonSchemaObject(type, checker, visited);
+  }
+
+  // --- Fallback ---
+  return { type: 'object' };
+}
+
+/**
  * Convert a TypeScript type node into a JSON Schema fragment.
  * Handles primitives, arrays, literal types, unions, and interfaces/type-literals.
  *
@@ -131,6 +308,7 @@ function typeNodeToJsonSchema(
     }
     visited.add(typeName);
 
+    // First, try the original method: getSymbolAtLocation
     const symbol = checker.getSymbolAtLocation(typeNode.typeName);
     if (symbol) {
       const decl = symbol.declarations?.[0];
@@ -140,6 +318,16 @@ function typeNodeToJsonSchema(
       if (decl && ts.isTypeAliasDeclaration(decl) && decl.type) {
         return typeNodeToJsonSchema(decl.type, checker, visited);
       }
+    }
+
+    // FALLBACK: Try getTypeAtLocation for imported types
+    try {
+      const resolvedType = checker.getTypeAtLocation(typeNode);
+      if (resolvedType && resolvedType.getProperties && resolvedType.getProperties().length > 0) {
+        return typeToJsonSchemaFromType(resolvedType, checker, new Set(visited));
+      }
+    } catch {
+      // Silently fail and use final fallback
     }
 
     // Fallback for common built-in types
@@ -423,6 +611,17 @@ function extractInputSchema(
   if (!firstParam || !firstParam.type) {
     return { type: 'object', properties: {} };
   }
+
+  // Try to resolve using the Type API first (handles imported types better)
+  try {
+    const resolvedType = checker.getTypeAtLocation(firstParam);
+    if (resolvedType) {
+      return typeToJsonSchemaFromType(resolvedType, checker, new Set());
+    }
+  } catch {
+    // Fallback to TypeNode-based resolution
+  }
+
   return typeNodeToJsonSchema(firstParam.type, checker);
 }
 

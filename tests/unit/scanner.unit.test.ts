@@ -264,4 +264,307 @@ class PartialProxyTools {
     // @Tool branch intentionally skips incomplete metadata silently
     expect(result.diagnostics).toEqual([]);
   });
+
+  it('expands imported interface schemas (not just object)', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    // First file: defines the interface
+    writeFile(path.join(root, 'src', 'types.ts'), `
+export interface ICreateNodeParams {
+  /** node type id */
+  nodeType: string;
+  retries?: number;
+  mode: 'fast' | 'slow';
+}
+`);
+
+    // Second file: imports and uses the interface
+    writeFile(path.join(root, 'src', 'tools.ts'), `
+import { ICreateNodeParams } from './types';
+
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+
+class MyTools {
+  @ExposeTool({
+    name: 'createNode',
+    displayName: 'Create Node',
+    modelDescription: 'Create a node',
+  })
+  createNode(params: ICreateNodeParams): Promise<void> {
+    return Promise.resolve();
+  }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.tools).toHaveLength(1);
+
+    const scanned = result.tools[0];
+    const schema = scanned.inputSchema as {
+      type: string;
+      properties: Record<string, { type?: string; description?: string; enum?: string[] }>;
+      required?: string[];
+    };
+
+    // CRITICAL: Should have expanded properties, not just { type: 'object' }
+    expect(schema.type).toBe('object');
+    expect(schema.properties).toBeDefined();
+    expect(Object.keys(schema.properties).length).toBeGreaterThan(0);
+    expect(schema.properties.nodeType.type).toBe('string');
+    expect(schema.properties.nodeType.description).toBe('node type id');
+    expect(schema.properties.retries.type).toBe('number');
+    expect(schema.properties.mode.enum).toEqual(['fast', 'slow']);
+    expect(schema.required).toEqual(['nodeType', 'mode']);
+  });
+
+  it('expands imported interface with multiple optional and required fields', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    // Define imported type with mixed optional/required fields
+    writeFile(path.join(root, 'src', 'types.ts'), `
+export interface IOperationParams {
+  id: string;
+  count?: number;
+  action: 'create' | 'update' | 'delete';
+}
+`);
+
+    // Import and use type
+    writeFile(path.join(root, 'src', 'ops.ts'), `
+import { IOperationParams } from './types';
+
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+
+class OpsService {
+  @ExposeTool({
+    name: 'performOp',
+    displayName: 'Perform Operation',
+    modelDescription: 'Perform an operation',
+  })
+  perform(params: IOperationParams): Promise<void> {
+    return Promise.resolve();
+  }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.tools).toHaveLength(1);
+
+    const scanned = result.tools[0];
+    const schema = scanned.inputSchema as {
+      type: string;
+      properties: Record<string, any>;
+      required?: string[];
+    };
+
+    // Verify properties are expanded
+    expect(schema.properties.id.type).toBe('string');
+    expect(schema.properties.count.type).toBe('number');
+    expect(schema.properties.action.type).toBe('string');
+    expect(schema.properties.action.enum).toEqual(['create', 'update', 'delete']);
+    
+    // Only id and action are required (count is optional)
+    expect(schema.required).toEqual(['id', 'action']);
+  });
+
+  it('uses Type API for imported types that getSymbol cannot resolve', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    // Create separate files to ensure symbol resolution requires Type API
+    writeFile(path.join(root, 'src', 'models.ts'), `
+export interface IPerson {
+  name: string;
+  age: number;
+}
+`);
+
+    writeFile(path.join(root, 'src', 'service.ts'), `
+import type { IPerson } from './models';
+
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+
+class PersonService {
+  @ExposeTool({
+    name: 'getPerson',
+    displayName: 'Get Person',
+    modelDescription: 'Get person by query',
+  })
+  get(query: IPerson): Promise<void> {
+    return Promise.resolve();
+  }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.tools).toHaveLength(1);
+
+    const scanned = result.tools[0];
+    const schema = scanned.inputSchema as {
+      type: string;
+      properties: Record<string, { type?: string }>;
+      required?: string[];
+    };
+
+    // Verify the Type API resolved the properties correctly
+    expect(schema.properties.name.type).toBe('string');
+    expect(schema.properties.age.type).toBe('number');
+    expect(schema.required).toEqual(['name', 'age']);
+  });
+
+  it('handles union types with mixed members (non-string literals)', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'service.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+
+interface IMixedUnion {
+  value: string | number | boolean;
+}
+
+class MixedService {
+  @ExposeTool({
+    name: 'mixedOp',
+    displayName: 'Mixed Operation',
+    modelDescription: 'Operation with mixed union',
+  })
+  op(input: IMixedUnion): Promise<void> {
+    return Promise.resolve();
+  }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.tools).toHaveLength(1);
+
+    const scanned = result.tools[0];
+    const schema = scanned.inputSchema as {
+      properties: Record<string, { oneOf?: any[] }>;
+    };
+
+    // Mixed union should have oneOf
+    expect(Array.isArray(schema.properties.value.oneOf)).toBe(true);
+    expect(schema.properties.value.oneOf.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('handles literal boolean type in schema generation', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'service.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+
+interface IBoolLiteral {
+  enabled: true;
+  disabled: false;
+}
+
+class BoolService {
+  @ExposeTool({
+    name: 'boolOp',
+    displayName: 'Bool Operation',
+    modelDescription: 'Operation with bool literals',
+  })
+  op(input: IBoolLiteral): Promise<void> {
+    return Promise.resolve();
+  }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.tools).toHaveLength(1);
+
+    const scanned = result.tools[0];
+    const schema = scanned.inputSchema as {
+      properties: Record<string, { type?: string; enum?: boolean[] }>;
+    };
+
+    expect(schema.properties.enabled.type).toBe('boolean');
+    expect(schema.properties.enabled.enum).toEqual([true]);
+    expect(schema.properties.disabled.type).toBe('boolean');
+    expect(schema.properties.disabled.enum).toEqual([false]);
+  });
+
+  it('covers all type flag branches in schema generation', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'all-types.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+
+interface IAllTypes {
+  stringField: string;
+  numberField: number;
+  boolField: boolean;
+  stringLiteral: 'value1' | 'value2';
+  numberLiteral: 42;
+  trueLiteral: true;
+  falseLiteral: false;
+  stringArray: string[];
+  numberArray: number[];
+  boolArray: boolean[];
+  mixedUnion: string | number;
+  emptyOptional?: never;
+  dictField: Record<string, string>;
+}
+
+class AllTypesService {
+  @ExposeTool({
+    name: 'allTypes',
+    displayName: 'All Types',
+    modelDescription: 'Test all type branches',
+  })
+  test(input: IAllTypes): Promise<void> {
+    return Promise.resolve();
+  }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.tools).toHaveLength(1);
+
+    const scanned = result.tools[0];
+    const schema = scanned.inputSchema as {
+      properties: Record<string, any>;
+      required?: string[];
+    };
+
+    // All primitive types
+    expect(schema.properties.stringField.type).toBe('string');
+    expect(schema.properties.numberField.type).toBe('number');
+    expect(schema.properties.boolField.type).toBe('boolean');
+
+    // Literals
+    expect(schema.properties.stringLiteral.enum).toEqual(['value1', 'value2']);
+    expect(schema.properties.numberLiteral.enum).toEqual([42]);
+    expect(schema.properties.trueLiteral.enum).toEqual([true]);
+    expect(schema.properties.falseLiteral.enum).toEqual([false]);
+
+    // Arrays
+    expect(schema.properties.stringArray.type).toBe('array');
+    expect(schema.properties.stringArray.items.type).toBe('string');
+    expect(schema.properties.numberArray.type).toBe('array');
+    expect(schema.properties.numberArray.items.type).toBe('number');
+    expect(schema.properties.boolArray.type).toBe('array');
+    expect(schema.properties.boolArray.items.type).toBe('boolean');
+
+    // Union
+    expect(schema.properties.mixedUnion.oneOf).toBeDefined();
+
+    // Record type
+    expect(schema.properties.dictField.type).toBe('object');
+
+    // Verify required fields (optional fields should not be in required)
+    expect(schema.required).toContain('stringField');
+    expect(schema.required).not.toContain('emptyOptional');
+  });
 });
