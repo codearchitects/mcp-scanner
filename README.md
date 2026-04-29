@@ -53,6 +53,9 @@ mcp-scanner --project /path/to/project --tsconfig tsconfig.json
 # Restrict scan only to a folder/subtree
 mcp-scanner --project /path/to/project --tools-path src/tools
 
+# Tag-scoped patching: only tools with this tag are replaced on rerun
+mcp-scanner --project /path/to/project --tools-tag core
+
 # Write to a specific package.json
 mcp-scanner --project /path/to/project --package-json ../apps/vscode-ext/package.json
 
@@ -158,11 +161,12 @@ Then declare it in your extension's `package.json`:
 
 Returns `IScanResult` with discovered tools, file count, and diagnostics.
 
-### `patchPackageJsonFile(path, tools)` — File Patcher
+### `patchPackageJsonFile(path, tools, options?)` — File Patcher
 
 Patches `package.json` on disk and updates `.mcp-scanner.state.json`.
+When `options.toolTag` is set, patching is tag-scoped and state-file ownership is not used.
 
-### `patchPackageJsonContent(raw, tools)` — String Patcher
+### `patchPackageJsonContent(raw, tools, previousGeneratedToolNames?, options?)` — String Patcher
 
 Patches raw JSON string (for use with VS Code fs API or other runtimes).
 Accepts an optional third argument with previously generated tool names.
@@ -174,6 +178,7 @@ patchPackageJsonContent(
   raw: string,
   generatedTools: IScannedTool[],
   previousGeneratedToolNames?: string[],
+  options?: { toolTag?: string },
 ): {
   content: string;
   result: IPatchResult;
@@ -191,6 +196,9 @@ mcp-scanner [options]
 --tools-path, -s <path>
                       Restrict scanning to this path subtree.
                       Relative paths are resolved from --project.
+--tools-tag, -g <tag>
+                      Tag generated tools and patch only tools with this tag.
+                      If omitted, legacy state-based patching is used.
 --package-json, -j <path>
                       package.json path to patch.
                       Relative paths are resolved from --project.
@@ -277,6 +285,7 @@ You can also build your own template using the same EJS syntax and variable cont
 Notes:
 
 - Use `--package-json` and `--proxy-file` together when source and target libraries differ.
+- Use `--tools-tag` when multiple generators write to the same `languageModelTools` array.
 - On first run, if the proxy file does not exist, `mcp-scanner` creates it with markers.
 - On subsequent runs, only marker sections (imports, class, methods) are updated; manual code outside markers is preserved.
 - If the target file exists but has no method markers, generation stops to avoid destructive overwrite.

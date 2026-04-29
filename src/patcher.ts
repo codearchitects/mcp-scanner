@@ -26,6 +26,10 @@ export interface IPatchResult {
   message: string;
 }
 
+export interface IPatchOptions {
+  toolTag?: string;
+}
+
 interface IAutoGenState {
   version: 1;
   generatedToolNames: string[];
@@ -41,6 +45,19 @@ function getToolName(entry: unknown): string | undefined {
   }
   const name = entry.name;
   return typeof name === 'string' ? name : undefined;
+}
+
+function hasToolTag(entry: unknown, tag: string): boolean {
+  if (!isRecord(entry)) {
+    return false;
+  }
+
+  const tags = entry.tags;
+  if (!Array.isArray(tags)) {
+    return false;
+  }
+
+  return tags.some((value) => typeof value === 'string' && value === tag);
 }
 
 function parseStateContent(raw: string): string[] {
@@ -85,6 +102,7 @@ export function patchPackageJsonContent(
   raw: string,
   generatedTools: IScannedTool[],
   previousGeneratedToolNames: string[] = [],
+  options: IPatchOptions = {},
 ): { content: string; result: IPatchResult; nextGeneratedToolNames: string[] } {
   let parsed: unknown;
   try {
@@ -115,6 +133,7 @@ export function patchPackageJsonContent(
 
   const startMarkerIndex = existingTools.findIndex((entry) => entry === MARKER_START);
   const endMarkerIndex = existingTools.findIndex((entry, index) => index > startMarkerIndex && entry === MARKER_END);
+  const toolTag = options.toolTag?.trim();
 
   const previousGeneratedSet = new Set(previousGeneratedToolNames);
   const manualTools: unknown[] = [];
@@ -131,15 +150,29 @@ export function patchPackageJsonContent(
       continue;
     }
 
+    if (toolTag && hasToolTag(entry, toolTag)) {
+      continue;
+    }
+
     const entryName = getToolName(entry);
-    if (entryName && previousGeneratedSet.has(entryName)) {
+    if (!toolTag && entryName && previousGeneratedSet.has(entryName)) {
       continue;
     }
 
     manualTools.push(entry);
   }
 
-  const generatedEntries: unknown[] = generatedTools.map((tool) => ({ ...tool }));
+  const generatedEntries: unknown[] = generatedTools.map((tool) => {
+    if (!toolTag) {
+      return { ...tool };
+    }
+
+    const mergedTags = Array.from(new Set([...(tool.tags ?? []), toolTag, 'generated-by-mcp-scanner']));
+    return {
+      ...tool,
+      tags: mergedTags,
+    };
+  });
   contributes.languageModelTools = [...manualTools, ...generatedEntries];
 
   root.contributes = contributes;
@@ -148,7 +181,12 @@ export function patchPackageJsonContent(
 
   return {
     content: `${JSON.stringify(root, null, 2)}\n`,
-    result: { ok: true, message: `Patched package.json with ${generatedTools.length} auto-generated tool(s).` },
+    result: {
+      ok: true,
+      message: toolTag
+        ? `Patched package.json with ${generatedTools.length} auto-generated tool(s) for tag '${toolTag}'.`
+        : `Patched package.json with ${generatedTools.length} auto-generated tool(s).`,
+    },
     nextGeneratedToolNames,
   };
 }
@@ -163,7 +201,11 @@ export function patchPackageJsonContent(
  * @param packageJsonPath Absolute path to package.json.
  * @param generatedTools The tools to inject.
  */
-export function patchPackageJsonFile(packageJsonPath: string, generatedTools: IScannedTool[]): IPatchResult {
+export function patchPackageJsonFile(
+  packageJsonPath: string,
+  generatedTools: IScannedTool[],
+  options: IPatchOptions = {},
+): IPatchResult {
   if (!fs.existsSync(packageJsonPath)) {
     return { ok: false, message: `File not found: ${packageJsonPath}` };
   }
@@ -180,11 +222,14 @@ export function patchPackageJsonFile(packageJsonPath: string, generatedTools: IS
     raw,
     generatedTools,
     previousGeneratedToolNames,
+    options,
   );
 
   if (result.ok) {
     fs.writeFileSync(packageJsonPath, content, 'utf-8');
-    fs.writeFileSync(stateFilePath, makeStateContent(nextGeneratedToolNames), 'utf-8');
+    if (!options.toolTag) {
+      fs.writeFileSync(stateFilePath, makeStateContent(nextGeneratedToolNames), 'utf-8');
+    }
   }
 
   return result;

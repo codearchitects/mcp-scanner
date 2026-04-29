@@ -7,12 +7,13 @@ import * as path from 'path';
 import { copyDefaultScaffoldTemplateToLocal, generateProxyFile } from './proxy-generator';
 import { AUTOGEN_STATE_FILE, patchPackageJsonFile } from './patcher';
 import { scanProjectForProxies } from './proxy-scanner';
-import { scanProject } from './scanner';
+import { IScannedTool, scanProject } from './scanner';
 
 interface CliArgs {
   projectRoot: string;
   tsconfigName: string;
   toolsPath?: string;
+  toolsTag?: string;
   packageJsonPath?: string;
   proxyFilePath?: string;
   proxyClassName?: string;
@@ -28,6 +29,7 @@ function parseArgs(argv: string[]): CliArgs {
     projectRoot: process.cwd(),
     tsconfigName: 'tsconfig.json',
     toolsPath: undefined,
+    toolsTag: undefined,
     packageJsonPath: undefined,
     proxyFilePath: undefined,
     proxyClassName: undefined,
@@ -52,6 +54,10 @@ function parseArgs(argv: string[]): CliArgs {
       case '--tools-path':
       case '-s':
         args.toolsPath = argv[++i];
+        break;
+      case '--tools-tag':
+      case '-g':
+        args.toolsTag = argv[++i];
         break;
       case '--package-json':
       case '-j':
@@ -111,6 +117,21 @@ function resolveFromProject(projectRoot: string, maybePath?: string): string | u
     : path.resolve(projectRoot, maybePath);
 }
 
+function applyToolsTag(tools: IScannedTool[], toolsTag?: string): IScannedTool[] {
+  const tag = toolsTag?.trim();
+  if (!tag) {
+    return tools;
+  }
+
+  return tools.map((tool) => {
+    const mergedTags = Array.from(new Set([...(tool.tags ?? []), tag, 'generated-by-mcp-scanner']));
+    return {
+      ...tool,
+      tags: mergedTags,
+    };
+  });
+}
+
 function main(): void {
   const args = parseArgs(process.argv);
 
@@ -127,6 +148,8 @@ Options:
   --tsconfig, -t <name>   tsconfig file name for the main project (default: tsconfig.json)
   --tools-path, -s <path> Restrict scanning to this path subtree.
                           Relative paths are resolved from --project.
+  --tools-tag, -g <tag>   Tag generated tools and patch only tools with this tag.
+                          If omitted, legacy state-based patching is used.
   --package-json, -j <path>
                           package.json path to patch. Relative paths are
                           resolved from --project. (default: <project>/package.json)
@@ -150,7 +173,7 @@ How it works:
   2. Finds methods decorated with @ExposeTool({ name, displayName, modelDescription })
   3. Extracts parameter interfaces and converts them to JSON Schema
   4. Writes generated tools into contributes.languageModelTools
-  5. Tracks generated ownership in ${AUTOGEN_STATE_FILE}
+  5. Tracks generated ownership in ${AUTOGEN_STATE_FILE} (legacy mode)
   6. Replaces only previously generated tools, preserving manual tools
 `);
     process.exit(0);
@@ -169,6 +192,9 @@ How it works:
   console.log(`   tsconfig: ${args.tsconfigName}`);
   if (args.toolsPath) {
     console.log(`   tools path: ${args.toolsPath}`);
+  }
+  if (args.toolsTag) {
+    console.log(`   tools tag: ${args.toolsTag}`);
   }
   if (args.packageJsonPath) {
     console.log(`   package.json: ${args.packageJsonPath}`);
@@ -201,6 +227,8 @@ How it works:
     result.filesScanned += extraResult.filesScanned;
     result.diagnostics.push(...extraResult.diagnostics.map((d) => `[${path.basename(extra.root)}] ${d}`));
   }
+
+  result.tools = applyToolsTag(result.tools, args.toolsTag);
 
   if (result.diagnostics.length > 0) {
     console.log('⚠️  Diagnostics:');
@@ -286,7 +314,7 @@ How it works:
   const packageJsonPath = resolveFromProject(args.projectRoot, args.packageJsonPath)
     ?? path.join(args.projectRoot, 'package.json');
 
-  const patchResult = patchPackageJsonFile(packageJsonPath, result.tools);
+  const patchResult = patchPackageJsonFile(packageJsonPath, result.tools, { toolTag: args.toolsTag });
   if (patchResult.ok) {
     console.log(`✅ ${patchResult.message}`);
   } else {

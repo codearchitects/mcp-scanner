@@ -25,6 +25,7 @@ export interface IScannedTool {
   toolReferenceName: string;
   icon: string;
   inputSchema: Record<string, unknown>;
+  tags?: string[];
 }
 
 /**
