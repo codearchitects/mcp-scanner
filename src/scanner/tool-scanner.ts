@@ -18,13 +18,44 @@ import * as ts from 'typescript';
  * `contributes.languageModelTools` in package.json.
  */
 export interface IScannedTool {
+  /**
+   * Unique tool identifier.
+   */
   name: string;
+
+  /**
+   * User-facing tool label.
+   */
   displayName: string;
+
+  /**
+   * Model-facing description used for tool selection.
+   */
   modelDescription: string;
+
+  /**
+   * Whether tool can be referenced with `#` in prompts.
+   */
   canBeReferencedInPrompt: boolean;
+
+  /**
+   * Prompt reference name of the tool.
+   */
   toolReferenceName: string;
+
+  /**
+   * VS Code codicon identifier.
+   */
   icon: string;
+
+  /**
+   * JSON Schema describing tool input.
+   */
   inputSchema: Record<string, unknown>;
+
+  /**
+   * Optional tool tags used for grouping/filtering.
+   */
   tags?: string[];
 }
 
@@ -32,14 +63,27 @@ export interface IScannedTool {
  * Result returned by {@link scanProject}.
  */
 export interface IScanResult {
-  /** All tools discovered across the project source files. */
+  /**
+   * All tools discovered across the project source files.
+   */
   tools: IScannedTool[];
-  /** Source files that were scanned. */
+  /**
+   * Source files that were scanned.
+   */
   filesScanned: number;
-  /** Diagnostics / warnings encountered during scanning. */
+  /**
+   * Diagnostics / warnings encountered during scanning.
+   */
   diagnostics: string[];
 }
 
+/**
+ * Check whether a source file is inside the optional search subtree.
+ *
+ * @param filePath Candidate source file path.
+ * @param searchPath Optional subtree root used as filter.
+ * @returns `true` when file is in scope for scanning.
+ */
 function isWithinSearchPath(filePath: string, searchPath?: string): boolean {
   if (!searchPath) {
     return true;
@@ -58,6 +102,11 @@ function isWithinSearchPath(filePath: string, searchPath?: string): boolean {
 /**
  * Convert a TypeScript type node into a JSON Schema fragment.
  * Handles primitives, arrays, literal types, unions, and interfaces/type-literals.
+ *
+ * @param typeNode Type node to convert.
+ * @param checker Program type checker.
+ * @param visited Circular-reference guard set.
+ * @returns JSON Schema fragment for the provided type node.
  */
 function typeNodeToJsonSchema(
   typeNode: ts.TypeNode,
@@ -160,6 +209,11 @@ function typeNodeToJsonSchema(
 
 /**
  * Convert an interface declaration to a JSON Schema object.
+ *
+ * @param decl Interface declaration node.
+ * @param checker Program type checker.
+ * @param visited Circular-reference guard set.
+ * @returns JSON Schema object for the interface.
  */
 function interfaceDeclToSchema(
   decl: ts.InterfaceDeclaration,
@@ -199,6 +253,11 @@ function interfaceDeclToSchema(
 
 /**
  * Convert an inline type literal to a JSON Schema object.
+ *
+ * @param node Inline type literal node.
+ * @param checker Program type checker.
+ * @param visited Circular-reference guard set.
+ * @returns JSON Schema object for the inline type.
  */
 function typeLiteralToSchema(
   node: ts.TypeLiteralNode,
@@ -239,6 +298,12 @@ function typeLiteralToSchema(
 /*  JSDoc extraction                                                   */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Extract plain-text JSDoc description from a node.
+ *
+ * @param node AST node that may have JSDoc.
+ * @returns JSDoc description text when available.
+ */
 function getJsDocDescription(node: ts.Node): string | undefined {
   const jsDocs = (node as any).jsDoc as ts.JSDoc[] | undefined;
   if (!jsDocs || jsDocs.length === 0) {
@@ -257,6 +322,9 @@ function getJsDocDescription(node: ts.Node): string | undefined {
 
 /**
  * Check whether a decorator call is `@ExposeTool(...)` and extract the options object literal.
+ *
+ * @param decorator Decorator node to inspect.
+ * @returns Object literal argument for `@ExposeTool(...)` when matched.
  */
 function getExposeToolArgs(decorator: ts.Decorator): ts.ObjectLiteralExpression | undefined {
   if (!ts.isCallExpression(decorator.expression)) {
@@ -276,6 +344,10 @@ function getExposeToolArgs(decorator: ts.Decorator): ts.ObjectLiteralExpression 
 
 /**
  * Extract a string property from an object literal expression.
+ *
+ * @param obj Object literal expression.
+ * @param name Property name to read.
+ * @returns String value when property exists and is a string literal.
  */
 function getStringProperty(obj: ts.ObjectLiteralExpression, name: string): string | undefined {
   for (const prop of obj.properties) {
@@ -290,6 +362,10 @@ function getStringProperty(obj: ts.ObjectLiteralExpression, name: string): strin
 
 /**
  * Extract a boolean property from an object literal expression.
+ *
+ * @param obj Object literal expression.
+ * @param name Property name to read.
+ * @returns Boolean value when property exists and is a boolean literal.
  */
 function getBooleanProperty(obj: ts.ObjectLiteralExpression, name: string): boolean | undefined {
   for (const prop of obj.properties) {
@@ -312,6 +388,10 @@ function getBooleanProperty(obj: ts.ObjectLiteralExpression, name: string): bool
 /**
  * Given a method declaration, find its first parameter's type node and
  * produce a JSON Schema from it.
+ *
+ * @param method Method declaration.
+ * @param checker Program type checker.
+ * @returns JSON Schema for first parameter type.
  */
 function extractInputSchema(
   method: ts.MethodDeclaration,
@@ -384,6 +464,11 @@ export function scanProject(
 /**
  * Recursively visit AST nodes looking for class declarations with
  * `@ExposeTool` decorated methods.
+ *
+ * @param node Current AST node.
+ * @param checker Program type checker.
+ * @param tools Accumulator for discovered tools.
+ * @param diagnostics Accumulator for scan diagnostics.
  */
 function visitNode(
   node: ts.Node,

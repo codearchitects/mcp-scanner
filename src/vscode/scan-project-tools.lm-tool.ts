@@ -16,6 +16,14 @@ import { scanProject } from '../scanner';
 /*  VS Code fs-based patcher                                           */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Patch workspace `package.json` using VS Code file system APIs.
+ *
+ * @param workspaceFolderUri Workspace root URI.
+ * @param packageJsonUri Package manifest URI.
+ * @param generatedTools Generated tools to write.
+ * @returns Patch result object.
+ */
 async function patchPackageJsonVscode(
   workspaceFolderUri: vscode.Uri,
   packageJsonUri: vscode.Uri,
@@ -77,10 +85,17 @@ export function registerScanProjectToolsLmTool(
     return undefined;
   }
 
+  /**
+   * Input schema accepted by the `scanProjectTools` LM tool.
+   */
   interface IScanToolInput {
-    /** Optional: workspace-relative path to tsconfig. Defaults to `tsconfig.json`. */
+    /**
+     * Optional: workspace-relative path to tsconfig. Defaults to `tsconfig.json`.
+     */
     tsconfigPath?: string;
-    /** If true, automatically apply changes without asking. */
+    /**
+     * If true, automatically apply changes without asking.
+     */
     autoApply?: boolean;
   }
 

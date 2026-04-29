@@ -3,41 +3,125 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { IProxyMethod } from './proxy-scanner';
 
+/**
+ * Directory where bundled template assets are located at runtime.
+ */
 const TEMPLATES_DIR = path.join(__dirname, 'templates');
+
+/**
+ * Fallback class name for generated proxy files.
+ */
 const DEFAULT_CLASS_NAME = 'GeneratedExposeToolProxies';
+
+/**
+ * Marker that bounds auto-generated import statements.
+ */
 export const IMPORTS_MARKER_START = '// <mcp-scanner:proxy-imports:start>';
+
+/**
+ * Marker that bounds auto-generated import statements.
+ */
 export const IMPORTS_MARKER_END = '// <mcp-scanner:proxy-imports:end>';
+
+/**
+ * Marker that bounds auto-generated class declaration line.
+ */
 export const CLASS_MARKER_START = '// <mcp-scanner:proxy-class:start>';
+
+/**
+ * Marker that bounds auto-generated class declaration line.
+ */
 export const CLASS_MARKER_END = '// <mcp-scanner:proxy-class:end>';
+
+/**
+ * Marker that bounds auto-generated method implementations.
+ */
 export const METHODS_MARKER_START = '// <mcp-scanner:proxy-methods:start>';
+
+/**
+ * Marker that bounds auto-generated method implementations.
+ */
 export const METHODS_MARKER_END = '// <mcp-scanner:proxy-methods:end>';
 
+/**
+ * Options for generating or updating a proxy file.
+ */
 export interface IGenerateProxyFileOptions {
+  /**
+   * Output path of generated proxy file.
+   */
   outputFilePath: string;
+
+  /**
+   * Optional class name for generated proxy class.
+   */
   className?: string;
+
+  /**
+   * Optional custom EJS scaffold template path.
+   */
   scaffoldTemplatePath?: string;
+
+  /**
+   * Optional source project root used as package fallback.
+   */
   sourceProjectRoot?: string;
 }
 
+/**
+ * Result status for proxy generation.
+ */
 export interface IGenerateProxyResult {
+  /**
+   * Whether generation or patching succeeded.
+   */
   ok: boolean;
+
+  /**
+   * Human-readable generation status.
+   */
   message: string;
 }
 
+/**
+ * Convert a Windows path to POSIX separators.
+ *
+ * @param value Path string.
+ * @returns Normalized POSIX-like path.
+ */
 function toPosixPath(value: string): string {
   return value.replace(/\\/g, '/');
 }
 
+/**
+ * Remove TypeScript source extensions from a file path.
+ *
+ * @param filePath Input file path.
+ * @returns Path without `.ts/.tsx/.mts/.cts/.d.ts` extension.
+ */
 function stripTypeScriptExtension(filePath: string): string {
   return filePath.replace(/\.(d\.)?[cm]?tsx?$/i, '');
 }
 
+/**
+ * Build relative module specifier from an output file to a source file.
+ *
+ * @param fromFilePath Generated file path.
+ * @param toFilePath Source file path.
+ * @returns Relative module specifier.
+ */
 function toRelativeModuleSpecifier(fromFilePath: string, toFilePath: string): string {
   const fromDir = path.dirname(fromFilePath);
   const relativePath = toPosixPath(path.relative(fromDir, stripTypeScriptExtension(toFilePath)));
   return relativePath.startsWith('.') ? relativePath : `./${relativePath}`;
 }
 
+/**
+ * Find nearest `package.json` from a path by traversing parents.
+ *
+ * @param startPath Starting file or folder path.
+ * @returns Absolute `package.json` path when found.
+ */
 function findNearestPackageJson(startPath: string): string | undefined {
   let current = startPath;
   if (!fs.existsSync(current) || !fs.statSync(current).isDirectory()) {
@@ -58,6 +142,12 @@ function findNearestPackageJson(startPath: string): string | undefined {
   }
 }
 
+/**
+ * Read package name from a `package.json` file.
+ *
+ * @param packageJsonPath Optional path to `package.json`.
+ * @returns Package name when available and valid.
+ */
 function tryReadPackageName(packageJsonPath?: string): string | undefined {
   if (!packageJsonPath) {
     return undefined;
@@ -72,10 +162,26 @@ function tryReadPackageName(packageJsonPath?: string): string | undefined {
   }
 }
 
+/**
+ * Convert package name into root module specifier.
+ *
+ * @param packageName Package name.
+ * @returns Module specifier rooted at package name.
+ */
 function toPackageModuleSpecifier(packageName: string): string {
   return packageName;
 }
 
+/**
+ * Resolve module specifier for local exported types.
+ *
+ * Uses package import in cross-package scenarios and relative import otherwise.
+ *
+ * @param outputFilePath Generated proxy file path.
+ * @param sourceFilePath Source method file path.
+ * @param sourceProjectRoot Optional source root fallback.
+ * @returns Module specifier used in `import type` statement.
+ */
 function resolveLocalTypeModuleSpecifier(
   outputFilePath: string,
   sourceFilePath: string,
@@ -101,6 +207,14 @@ function resolveLocalTypeModuleSpecifier(
   return toRelativeModuleSpecifier(outputFilePath, sourceFilePath);
 }
 
+/**
+ * Merge local exported type imports into method import statements.
+ *
+ * @param methods Scanned proxy methods.
+ * @param outputFilePath Generated proxy file path.
+ * @param sourceProjectRoot Optional source root fallback.
+ * @returns Methods enriched with synthetic local type imports.
+ */
 function addLocalTypeImports(
   methods: IProxyMethod[],
   outputFilePath: string,
@@ -152,6 +266,15 @@ function addLocalTypeImports(
   });
 }
 
+/**
+ * Replace content between two marker lines.
+ *
+ * @param content Full document content.
+ * @param startMarker Start marker text.
+ * @param endMarker End marker text.
+ * @param replacement Replacement content.
+ * @returns Updated content with marker region replaced.
+ */
 function replaceBetweenMarkers(
   content: string,
   startMarker: string,
@@ -178,6 +301,14 @@ function replaceBetweenMarkers(
   return `${before}${normalizedReplacement}${after}`;
 }
 
+/**
+ * Extract content between two marker lines.
+ *
+ * @param content Full document content.
+ * @param startMarker Start marker text.
+ * @param endMarker End marker text.
+ * @returns Trimmed content between markers.
+ */
 function extractBetweenMarkers(
   content: string,
   startMarker: string,
@@ -194,6 +325,13 @@ function extractBetweenMarkers(
   return content.slice(sectionStart, endIndex).trim();
 }
 
+/**
+ * Generate or update a proxy file from scanned methods.
+ *
+ * @param methods Scanned methods.
+ * @param options Generation options.
+ * @returns Generation result.
+ */
 export function generateProxyFile(methods: IProxyMethod[], options: IGenerateProxyFileOptions): IGenerateProxyResult {
   const className = options.className?.trim() || DEFAULT_CLASS_NAME;
   const methodsWithImports = addLocalTypeImports(methods, options.outputFilePath, options.sourceProjectRoot);
@@ -253,6 +391,11 @@ export function generateProxyFile(methods: IProxyMethod[], options: IGeneratePro
   };
 }
 
+/**
+ * Get bundled default scaffold template content.
+ *
+ * @returns Scaffold template text or empty string when missing.
+ */
 export function getDefaultScaffoldTemplateContent(): string {
   const templatePath = path.join(TEMPLATES_DIR, 'proxy-scaffold.ejs');
   if (fs.existsSync(templatePath)) {
@@ -261,6 +404,12 @@ export function getDefaultScaffoldTemplateContent(): string {
   return '';
 }
 
+/**
+ * Copy bundled default scaffold template to a local file.
+ *
+ * @param outputPath Destination path.
+ * @returns Nothing.
+ */
 export function copyDefaultScaffoldTemplateToLocal(outputPath: string): void {
   const templateContent = getDefaultScaffoldTemplateContent();
   if (!templateContent) {
@@ -271,19 +420,64 @@ export function copyDefaultScaffoldTemplateToLocal(outputPath: string): void {
   fs.writeFileSync(outputPath, templateContent, 'utf-8');
 }
 
+/**
+ * EJS context used by the scaffold renderer.
+ */
 interface IProxyScaffoldRenderContext {
+  /**
+   * Class name rendered into scaffold.
+   */
   className: string;
+
+  /**
+   * Method metadata rendered into scaffold loops.
+   */
   methods: Array<{
+    /**
+     * Decorator tool name.
+     */
     toolName: string;
+
+    /**
+     * Method name.
+     */
     methodName: string;
+
+    /**
+     * Return type text.
+     */
     returnTypeText: string;
+
+    /**
+     * Optional original method JSDoc.
+     */
     jsDoc?: string;
+
+    /**
+     * Parameter descriptors for rendering method signature.
+     */
     parameters: Array<{ name: string; typeText: string; optional: boolean }>;
+
+    /**
+     * Convenience field for generated bridge TODO block.
+     */
     firstParameterName?: string;
+
+    /**
+     * Import statements required by this method.
+     */
     importStatements: string[];
   }>;
 }
 
+/**
+ * Render a scaffold template using scanned method metadata.
+ *
+ * @param methods Methods to render.
+ * @param scaffoldTemplate EJS scaffold content.
+ * @param className Class name to render.
+ * @returns Rendered TypeScript file content.
+ */
 export function renderProxyFileFromScaffoldTemplate(
   methods: IProxyMethod[],
   scaffoldTemplate: string,

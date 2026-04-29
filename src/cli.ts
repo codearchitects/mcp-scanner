@@ -9,21 +9,87 @@ import { AUTOGEN_STATE_FILE, patchPackageJsonFile } from './patcher';
 import { scanProjectForProxies } from './proxy-scanner';
 import { IScannedTool, scanProject } from './scanner';
 
+/**
+ * Parsed CLI arguments used by the `mcp-scanner` command.
+ */
 interface CliArgs {
+  /**
+   * Root folder of the main source project.
+   */
   projectRoot: string;
+
+  /**
+   * Tsconfig file name used for scanning.
+   */
   tsconfigName: string;
+
+  /**
+   * Optional subtree path limiting tool scan scope.
+   */
   toolsPath?: string;
+
+  /**
+   * Optional ownership tag for generated language model tools.
+   */
   toolsTag?: string;
+
+  /**
+   * Optional package.json path to patch.
+   */
   packageJsonPath?: string;
+
+  /**
+   * Optional output proxy file path.
+   */
   proxyFilePath?: string;
+
+  /**
+   * Optional class name for generated proxy class.
+   */
   proxyClassName?: string;
+
+  /**
+   * Optional scaffold template path used for proxy generation.
+   */
   scaffoldTemplatePath?: string;
+
+  /**
+   * Optional destination path for copying default scaffold template.
+   */
   initProxyFile?: string;
-  extraProjects: Array<{ root: string; tsconfig: string }>;
+
+  /**
+   * Additional projects to scan and merge into the result.
+   */
+  extraProjects: Array<{
+    /**
+     * Root folder of the additional project.
+     */
+    root: string;
+
+    /**
+     * Tsconfig file name for the additional project.
+     */
+    tsconfig: string;
+  }>;
+
+  /**
+   * Whether scanner should only print generated JSON.
+   */
   dryRun: boolean;
+
+  /**
+   * Whether CLI should print help and exit.
+   */
   help: boolean;
 }
 
+/**
+ * Parse command line arguments into a structured object.
+ *
+ * @param argv Raw process arguments.
+ * @returns Normalized CLI argument object.
+ */
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
     projectRoot: process.cwd(),
@@ -107,6 +173,13 @@ function parseArgs(argv: string[]): CliArgs {
   return args;
 }
 
+/**
+ * Resolve an optional path relative to a project root.
+ *
+ * @param projectRoot Root folder used for relative path resolution.
+ * @param maybePath Optional absolute or relative path.
+ * @returns Absolute path when provided, otherwise `undefined`.
+ */
 function resolveFromProject(projectRoot: string, maybePath?: string): string | undefined {
   if (!maybePath) {
     return undefined;
@@ -117,6 +190,13 @@ function resolveFromProject(projectRoot: string, maybePath?: string): string | u
     : path.resolve(projectRoot, maybePath);
 }
 
+/**
+ * Add generator ownership tags to scanned tools when `--tools-tag` is provided.
+ *
+ * @param tools Tools discovered by the scanner.
+ * @param toolsTag Optional ownership tag.
+ * @returns Tool list with merged tags when tag mode is enabled.
+ */
 function applyToolsTag(tools: IScannedTool[], toolsTag?: string): IScannedTool[] {
   const tag = toolsTag?.trim();
   if (!tag) {
@@ -132,6 +212,11 @@ function applyToolsTag(tools: IScannedTool[], toolsTag?: string): IScannedTool[]
   });
 }
 
+/**
+ * Execute the `mcp-scanner` CLI workflow.
+ *
+ * @returns Nothing. Exits process with appropriate status code.
+ */
 function main(): void {
   const args = parseArgs(process.argv);
 

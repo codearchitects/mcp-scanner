@@ -1,35 +1,118 @@
 import * as path from 'path';
 import * as ts from 'typescript';
 
+/**
+ * Proxy method parameter metadata.
+ */
 export interface IProxyParameter {
+  /**
+   * Parameter name as used in generated signature.
+   */
   name: string;
+
+  /**
+   * Textual TypeScript type for the parameter.
+   */
   typeText: string;
+
+  /**
+   * Whether parameter is optional.
+   */
   optional: boolean;
 }
 
+/**
+ * Proxy-capable method metadata extracted from source.
+ */
 export interface IProxyMethod {
+  /**
+   * Tool name declared in `@ExposeTool({ name })`.
+   */
   toolName: string;
+
+  /**
+   * Source method name.
+   */
   methodName: string;
+
+  /**
+   * Source class name.
+   */
   className: string;
+
+  /**
+   * Absolute path to source file containing the method.
+   */
   sourceFilePath: string;
+
+  /**
+   * Optional raw JSDoc block extracted from source method.
+   */
   jsDoc?: string;
+
+  /**
+   * Return type text extracted from source method.
+   */
   returnTypeText: string;
+
+  /**
+   * Parameter metadata extracted from source method.
+   */
   parameters: IProxyParameter[];
+
+  /**
+   * Import statements required by method signature.
+   */
   importStatements: string[];
+
+  /**
+   * Locally exported type names referenced by method signature.
+   */
   localTypeNames: string[];
 }
 
+/**
+ * Proxy scanner result payload.
+ */
 export interface IProxyScanResult {
+  /**
+   * Methods discovered for proxy generation.
+   */
   methods: IProxyMethod[];
+
+  /**
+   * Number of source files actually scanned.
+   */
   filesScanned: number;
+
+  /**
+   * Diagnostics produced during proxy scanning.
+   */
   diagnostics: string[];
 }
 
+/**
+ * Internal mapping for imported type bindings.
+ */
 interface IImportBinding {
+  /**
+   * Import module specifier.
+   */
   moduleSpecifier: string;
+
+  /**
+   * Full normalized declaration text.
+   */
   declarationText: string;
 }
 
+/**
+ * Check whether file is under optional search subtree.
+ *
+ * @param filePath Candidate file path.
+ * @param searchPath Optional subtree root.
+ * @returns `true` when file should be scanned.
+ */
 function isWithinSearchPath(filePath: string, searchPath?: string): boolean {
   if (!searchPath) {
     return true;
@@ -41,6 +124,12 @@ function isWithinSearchPath(filePath: string, searchPath?: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+/**
+ * Extract `@ExposeTool({...})` options object from a decorator.
+ *
+ * @param decorator Decorator AST node.
+ * @returns Options object literal when decorator is `ExposeTool`.
+ */
 function getExposeToolArgs(decorator: ts.Decorator): ts.ObjectLiteralExpression | undefined {
   if (!ts.isCallExpression(decorator.expression)) {
     return undefined;
@@ -55,6 +144,13 @@ function getExposeToolArgs(decorator: ts.Decorator): ts.ObjectLiteralExpression 
   return firstArg && ts.isObjectLiteralExpression(firstArg) ? firstArg : undefined;
 }
 
+/**
+ * Read string property from object literal.
+ *
+ * @param obj Object literal expression.
+ * @param name Property name.
+ * @returns String property value when found.
+ */
 function getStringProperty(obj: ts.ObjectLiteralExpression, name: string): string | undefined {
   for (const prop of obj.properties) {
     if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name) || prop.name.text !== name) {
@@ -69,6 +165,13 @@ function getStringProperty(obj: ts.ObjectLiteralExpression, name: string): strin
   return undefined;
 }
 
+/**
+ * Extract nearest JSDoc block preceding a method.
+ *
+ * @param sourceFile Source file containing method.
+ * @param method Method declaration.
+ * @returns Raw JSDoc text when available.
+ */
 function getMethodJsDoc(sourceFile: ts.SourceFile, method: ts.MethodDeclaration): string | undefined {
   const ranges = ts.getLeadingCommentRanges(sourceFile.getFullText(), method.getFullStart()) ?? [];
   for (let i = ranges.length - 1; i >= 0; i--) {
@@ -81,6 +184,12 @@ function getMethodJsDoc(sourceFile: ts.SourceFile, method: ts.MethodDeclaration)
   return undefined;
 }
 
+/**
+ * Collect referenced type names from a type node tree.
+ *
+ * @param typeNode Root type node.
+ * @param names Set receiving discovered type names.
+ */
 function collectTypeReferenceNames(typeNode: ts.TypeNode, names: Set<string>): void {
   const visit = (node: ts.Node): void => {
     if (ts.isTypeReferenceNode(node)) {
@@ -112,6 +221,12 @@ function collectTypeReferenceNames(typeNode: ts.TypeNode, names: Set<string>): v
   visit(typeNode);
 }
 
+/**
+ * Convert import declaration text to `import type` form.
+ *
+ * @param declarationText Original import text.
+ * @returns Type-only import text where applicable.
+ */
 function normalizeToTypeImport(declarationText: string): string {
   if (declarationText.startsWith('import type ')) {
     return declarationText;
@@ -124,6 +239,12 @@ function normalizeToTypeImport(declarationText: string): string {
   return declarationText.replace(/^import\s+/, 'import type ');
 }
 
+/**
+ * Build map of imported identifiers to their declaration text.
+ *
+ * @param sourceFile Source file to inspect.
+ * @returns Map from identifier to import binding details.
+ */
 function collectImportsMap(sourceFile: ts.SourceFile): Map<string, IImportBinding> {
   const imports = new Map<string, IImportBinding>();
 
@@ -160,10 +281,22 @@ function collectImportsMap(sourceFile: ts.SourceFile): Map<string, IImportBindin
   return imports;
 }
 
+/**
+ * Check whether declaration carries `export` modifier.
+ *
+ * @param node Declaration node.
+ * @returns `true` if declaration is exported.
+ */
 function hasExportModifier(node: ts.Node): boolean {
   return (ts.getCombinedModifierFlags(node as ts.Declaration) & ts.ModifierFlags.Export) !== 0;
 }
 
+/**
+ * Collect exported type names declared in a source file.
+ *
+ * @param sourceFile Source file to inspect.
+ * @returns Set of exported interface/type/enum/class names.
+ */
 function collectExportedTypeNames(sourceFile: ts.SourceFile): Set<string> {
   const exported = new Set<string>();
 
@@ -185,6 +318,13 @@ function collectExportedTypeNames(sourceFile: ts.SourceFile): Set<string> {
   return exported;
 }
 
+/**
+ * Resolve generated parameter name from binding syntax.
+ *
+ * @param paramName Parameter binding name.
+ * @param index Parameter index.
+ * @returns Identifier name or synthetic fallback.
+ */
 function getParameterName(paramName: ts.BindingName, index: number): string {
   if (ts.isIdentifier(paramName)) {
     return paramName.text;
@@ -193,6 +333,13 @@ function getParameterName(paramName: ts.BindingName, index: number): string {
   return `params${index + 1}`;
 }
 
+/**
+ * Convert method parameters into proxy parameter metadata.
+ *
+ * @param method Method declaration.
+ * @param sourceFile Source file for text extraction.
+ * @returns Proxy parameter descriptors.
+ */
 function toProxyParameter(method: ts.MethodDeclaration, sourceFile: ts.SourceFile): IProxyParameter[] {
   const output: IProxyParameter[] = [];
 
@@ -208,6 +355,12 @@ function toProxyParameter(method: ts.MethodDeclaration, sourceFile: ts.SourceFil
   return output;
 }
 
+/**
+ * Collect all referenced type names used by method signature.
+ *
+ * @param method Method declaration.
+ * @returns Referenced type names.
+ */
 function collectMethodTypeReferenceNames(method: ts.MethodDeclaration): Set<string> {
   const referenceNames = new Set<string>();
 
@@ -224,6 +377,14 @@ function collectMethodTypeReferenceNames(method: ts.MethodDeclaration): Set<stri
   return referenceNames;
 }
 
+/**
+ * Build import data for a method signature.
+ *
+ * @param method Method declaration.
+ * @param importsMap Imported identifiers map.
+ * @param exportedTypeNames Locally exported type names.
+ * @returns Import statements and local type references.
+ */
 function toMethodImportData(
   method: ts.MethodDeclaration,
   importsMap: Map<string, IImportBinding>,
@@ -252,6 +413,14 @@ function toMethodImportData(
   };
 }
 
+/**
+ * Scan project sources and extract proxy metadata for `@ExposeTool` methods.
+ *
+ * @param projectRoot Project root folder.
+ * @param tsconfigFileName Tsconfig file name.
+ * @param toolsSearchPath Optional subtree filter.
+ * @returns Proxy scan result.
+ */
 export function scanProjectForProxies(
   projectRoot: string,
   tsconfigFileName = 'tsconfig.json',
