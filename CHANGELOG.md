@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [1.1.3] - 2026-04-29
+
+### Fixed
+- Fixed handling of imported interfaces and types, ensuring accurate schema generation even for complex types.
+
 ## [1.1.2] - 2026-04-29
 
 ### Added
@@ -50,6 +55,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Added
 - Initial release baseline.
 
+[1.1.3]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.3
 [1.1.2]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.2
 [1.1.1]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.1
 [1.1.0]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.0
