@@ -208,6 +208,57 @@ function resolveLocalTypeModuleSpecifier(
 }
 
 /**
+ * Extract module specifier from an `import ... from 'x'` statement.
+ *
+ * @param importStatement Full import statement text.
+ * @returns Module specifier when statement matches expected form.
+ */
+function extractModuleSpecifier(importStatement: string): string | undefined {
+  const match = importStatement.match(/\bfrom\s+['"]([^'"]+)['"]/);
+  return match?.[1];
+}
+
+/**
+ * Replace module specifier in an `import ... from 'x'` statement.
+ *
+ * @param importStatement Full import statement text.
+ * @param moduleSpecifier New module specifier.
+ * @returns Updated import statement text.
+ */
+function replaceModuleSpecifier(importStatement: string, moduleSpecifier: string): string {
+  return importStatement.replace(/\bfrom\s+['"][^'"]+['"]/, `from '${moduleSpecifier}'`);
+}
+
+/**
+ * Resolve an import statement for the generated proxy file location.
+ *
+ * Relative imports from source files are rewritten so they remain valid from
+ * the proxy output path. In cross-package scenarios they are rewritten to the
+ * source package root import.
+ *
+ * @param importStatement Import statement from source method signature.
+ * @param sourceFilePath Source method file path.
+ * @param outputFilePath Generated proxy file path.
+ * @param sourceProjectRoot Optional source root fallback.
+ * @returns Import statement adjusted for generated proxy location.
+ */
+function resolveMethodImportStatement(
+  importStatement: string,
+  sourceFilePath: string,
+  outputFilePath: string,
+  sourceProjectRoot?: string,
+): string {
+  const moduleSpecifier = extractModuleSpecifier(importStatement);
+  if (!moduleSpecifier || !moduleSpecifier.startsWith('.')) {
+    return importStatement;
+  }
+
+  const sourceResolvedTarget = path.resolve(path.dirname(sourceFilePath), moduleSpecifier);
+  const rewrittenSpecifier = resolveLocalTypeModuleSpecifier(outputFilePath, sourceResolvedTarget, sourceProjectRoot);
+  return replaceModuleSpecifier(importStatement, rewrittenSpecifier);
+}
+
+/**
  * Merge local exported type imports into method import statements.
  *
  * @param methods Scanned proxy methods.
@@ -251,12 +302,22 @@ function addLocalTypeImports(
   }
 
   return methods.map((method) => {
+    const resolvedImportStatements = method.importStatements.map((statement) => resolveMethodImportStatement(
+      statement,
+      method.sourceFilePath,
+      outputFilePath,
+      sourceProjectRoot,
+    ));
+
     const localImport = localImportsBySource.get(method.sourceFilePath);
     if (!localImport) {
-      return method;
+      return {
+        ...method,
+        importStatements: Array.from(new Set(resolvedImportStatements)).sort((a, b) => a.localeCompare(b)),
+      };
     }
 
-    const importStatements = Array.from(new Set([...method.importStatements, localImport]))
+    const importStatements = Array.from(new Set([...resolvedImportStatements, localImport]))
       .sort((a, b) => a.localeCompare(b));
 
     return {

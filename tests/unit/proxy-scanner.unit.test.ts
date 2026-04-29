@@ -95,6 +95,36 @@ class OutScope {
     expect(result.methods.map((m) => m.toolName)).toEqual(['inScope']);
   });
 
+  it('keeps only used symbols from grouped imports', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'external.ts'), `
+export interface IUsedType { id: string; }
+export interface IUnusedType { value: string; }
+`);
+
+    writeFile(path.join(root, 'src', 'service.ts'), `
+import type { IUnusedType, IUsedType } from './external';
+
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+
+class ProxySource {
+  @ExposeTool({ name: 'proxyTool', displayName: 'Proxy Tool', modelDescription: 'Proxy desc' })
+  run(params: IUsedType): Promise<IUsedType> {
+    return Promise.resolve(params);
+  }
+}
+`);
+
+    const result = scanProjectForProxies(root);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.methods).toHaveLength(1);
+    expect(result.methods[0].importStatements).toEqual([
+      "import type { IUsedType } from './external';",
+    ]);
+  });
+
   it('emits diagnostics for methods with ExposeTool missing required name', () => {
     const root = makeTempDir();
     writeBaseProject(root);

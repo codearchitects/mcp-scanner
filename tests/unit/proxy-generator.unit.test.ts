@@ -165,4 +165,57 @@ ${METHODS_MARKER_END}
     const content = fs.readFileSync(outputFilePath, 'utf-8');
     expect(content).toContain("import type { ILocal } from '@scope/source';");
   });
+
+  it('rewrites relative signature imports to the proxy output location', () => {
+    const root = makeTempDir();
+    const sourceFilePath = path.join(root, 'src', 'features', 'services', 'tool-service.ts');
+    const outputFilePath = path.join(root, 'src', 'generated', 'generated-proxy.ts');
+
+    writeFile(path.join(root, 'src', 'hooks', 'index.ts'), 'export interface ISelectedArtifactSnapshot { id: string }\n');
+    writeFile(sourceFilePath, 'export interface ILocal { name: string }\n');
+    writeFile(path.join(root, 'scaffold.ejs'), scaffold);
+
+    const method = buildMethod(sourceFilePath);
+    method.importStatements = ["import type { ISelectedArtifactSnapshot } from '../../hooks';"];
+
+    const result = generateProxyFile([method], {
+      outputFilePath,
+      className: 'RewriteProxy',
+      scaffoldTemplatePath: path.join(root, 'scaffold.ejs'),
+      sourceProjectRoot: root,
+    });
+
+    expect(result.ok).toBe(true);
+    const content = fs.readFileSync(outputFilePath, 'utf-8');
+    expect(content).toContain("import type { ISelectedArtifactSnapshot } from '../hooks';");
+  });
+
+  it('rewrites relative signature imports to package root in cross-package output', () => {
+    const root = makeTempDir();
+    const sourcePackageRoot = path.join(root, 'packages', 'source');
+    const targetPackageRoot = path.join(root, 'packages', 'target');
+
+    const sourceFilePath = path.join(sourcePackageRoot, 'src', 'services', 'tool-service.ts');
+    const outputFilePath = path.join(targetPackageRoot, 'src', 'generated', 'generated-proxy.ts');
+
+    writeFile(path.join(sourcePackageRoot, 'package.json'), JSON.stringify({ name: '@scope/source' }));
+    writeFile(path.join(targetPackageRoot, 'package.json'), JSON.stringify({ name: '@scope/target' }));
+    writeFile(path.join(sourcePackageRoot, 'src', 'hooks', 'index.ts'), 'export interface ISelectedArtifactSnapshot { id: string }\n');
+    writeFile(sourceFilePath, 'export interface ILocal { name: string }\n');
+    writeFile(path.join(root, 'scaffold.ejs'), scaffold);
+
+    const method = buildMethod(sourceFilePath);
+    method.importStatements = ["import type { ISelectedArtifactSnapshot } from '../../hooks';"];
+
+    const result = generateProxyFile([method], {
+      outputFilePath,
+      className: 'CrossRewriteProxy',
+      scaffoldTemplatePath: path.join(root, 'scaffold.ejs'),
+      sourceProjectRoot: sourcePackageRoot,
+    });
+
+    expect(result.ok).toBe(true);
+    const content = fs.readFileSync(outputFilePath, 'utf-8');
+    expect(content).toContain("import type { ISelectedArtifactSnapshot } from '@scope/source';");
+  });
 });
