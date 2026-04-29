@@ -191,4 +191,77 @@ class Advanced {
     const noParam = result.tools.find((t) => t.name === 'noParamTool');
     expect(noParam?.inputSchema).toEqual({ type: 'object', properties: {} });
   });
+
+  it('extracts tools and schema from @Tool decorated methods', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'tool-decorator.ts'), `
+function Tool(_: unknown): MethodDecorator { return () => undefined; }
+
+interface ICreateNodeParams {
+  /** node type id */
+  nodeType: string;
+  retries?: number;
+}
+
+class ProxyTools {
+  @Tool({
+    name: 'createNode',
+    displayName: 'Create Node',
+    modelDescription: 'Create node in model',
+    icon: '$(symbol-method)',
+    canBeReferencedInPrompt: false,
+  })
+  createNode(params: ICreateNodeParams): Promise<unknown> {
+    return Promise.resolve(params);
+  }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.tools).toHaveLength(1);
+
+    const scanned = result.tools[0];
+    expect(scanned.name).toBe('createNode');
+    expect(scanned.displayName).toBe('Create Node');
+    expect(scanned.icon).toBe('$(symbol-method)');
+    expect(scanned.canBeReferencedInPrompt).toBe(false);
+
+    const schema = scanned.inputSchema as {
+      properties: Record<string, { type?: string; description?: string }>;
+      required?: string[];
+    };
+
+    expect(schema.properties.nodeType.type).toBe('string');
+    expect(schema.properties.nodeType.description).toBe('node type id');
+    expect(schema.properties.retries.type).toBe('number');
+    expect(schema.required).toEqual(['nodeType']);
+  });
+
+  it('skips @Tool methods with incomplete required metadata', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'tool-incomplete.ts'), `
+function Tool(_: unknown): MethodDecorator { return () => undefined; }
+interface IInput { value: string; }
+
+class PartialProxyTools {
+  @Tool({
+    name: 'missingDescription',
+    displayName: 'Missing Description',
+  })
+  run(input: IInput): string {
+    return input.value;
+  }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.tools).toEqual([]);
+    // @Tool branch intentionally skips incomplete metadata silently
+    expect(result.diagnostics).toEqual([]);
+  });
 });
