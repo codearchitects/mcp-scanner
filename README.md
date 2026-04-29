@@ -50,6 +50,24 @@ mcp-scanner
 # Or with options
 mcp-scanner --project /path/to/project --tsconfig tsconfig.json
 
+# Restrict scan only to a folder/subtree
+mcp-scanner --project /path/to/project --tools-path src/tools
+
+# Tag-scoped patching: only tools with this tag are replaced on rerun
+mcp-scanner --project /path/to/project --tools-tag core
+
+# Write to a specific package.json
+mcp-scanner --project /path/to/project --package-json ../apps/vscode-ext/package.json
+
+# Generate proxy methods into another library file
+mcp-scanner --project /path/to/source-lib \
+  --proxy-file ../apps/vscode-ext/src/services/generated-proxies.ts \
+  --scaffold-template ../apps/vscode-ext/proxy-scaffold.ejs \
+  --proxy-class ModelerToolsProxy
+
+# Copy the default proxy scaffold template to customize it
+mcp-scanner --init-proxy-file ./proxy-scaffold.ejs
+
 # Dry run (preview without writing)
 mcp-scanner --dry-run
 ```
@@ -143,11 +161,12 @@ Then declare it in your extension's `package.json`:
 
 Returns `IScanResult` with discovered tools, file count, and diagnostics.
 
-### `patchPackageJsonFile(path, tools)` — File Patcher
+### `patchPackageJsonFile(path, tools, options?)` — File Patcher
 
 Patches `package.json` on disk and updates `.mcp-scanner.state.json`.
+When `options.toolTag` is set, patching is tag-scoped and state-file ownership is not used.
 
-### `patchPackageJsonContent(raw, tools)` — String Patcher
+### `patchPackageJsonContent(raw, tools, previousGeneratedToolNames?, options?)` — String Patcher
 
 Patches raw JSON string (for use with VS Code fs API or other runtimes).
 Accepts an optional third argument with previously generated tool names.
@@ -159,6 +178,7 @@ patchPackageJsonContent(
   raw: string,
   generatedTools: IScannedTool[],
   previousGeneratedToolNames?: string[],
+  options?: { toolTag?: string },
 ): {
   content: string;
   result: IPatchResult;
@@ -173,10 +193,119 @@ mcp-scanner [options]
 
 --project, -p <path>    Project root (default: cwd)
 --tsconfig, -t <name>   tsconfig file name (default: tsconfig.json)
+--tools-path, -s <path>
+                      Restrict scanning to this path subtree.
+                      Relative paths are resolved from --project.
+--tools-tag, -g <tag>
+                      Tag generated tools and patch only tools with this tag.
+                      If omitted, legacy state-based patching is used.
+--package-json, -j <path>
+                      package.json path to patch.
+                      Relative paths are resolved from --project.
+                      (default: <project>/package.json)
+--proxy-file, -o <path>
+                      Generate proxy methods into this file.
+                      Relative paths are resolved from --project.
+--proxy-class, -c <name>
+                      Class name for generated proxies.
+                      (default: GeneratedExposeToolProxies)
+--scaffold-template, -x <path>
+                      Custom EJS scaffold template for proxy generation.
+                      Relative paths are resolved from --project.
+--init-proxy-file <path>
+                      Copy default complete proxy scaffold template.
+                      Recommended extension: .ejs
 --extra, -e <path> [tsconfig]
                         Additional project root to scan (repeatable)
 --dry-run, -d           Preview without writing
 --help, -h              Show help
+```
+
+## Proxy Generation (Monorepo)
+
+When `@ExposeTool` methods live in one library but runtime command handlers live in another,
+you can generate a proxy class in the target library.
+
+### Usage
+
+```bash
+# Copy the default proxy scaffold template to start with
+mcp-scanner --init-proxy-file ./proxy-scaffold.ejs
+
+# Edit proxy-scaffold.ejs to customize (class layout, method body, imports)
+# Then generate/update the TypeScript proxy file from that template
+mcp-scanner --proxy-file ./MyProxyClass.ts \
+  --proxy-class MyCustomClassName \
+  --scaffold-template ./proxy-scaffold.ejs
+```
+
+### What is Generated
+
+- One proxy method for each decorated source method.
+- Original method JSDoc copied to each generated proxy method.
+- Type imports required by method parameters/return type.
+- Method body includes TODO comment with context and example.
+- Reserved injection zones, so only generated sections are refreshed on re-run.
+
+### Scaffold Template Variables
+
+The scaffold template (EJS) has access to:
+
+- `className`: The class name (set via `--proxy-class` or from template)
+- `methods`: Array of method objects with:
+  - `toolName`: Tool name from `@ExposeTool({ name })`
+  - `methodName`: Source method name
+  - `returnTypeText`: Return type text
+  - `jsDoc`: JSDoc comment from source
+  - `parameters`: Array of `{ name, typeText, optional }`
+  - `firstParameterName`: First parameter name if present
+  - `importStatements`: Array of required import statements
+
+**Default scaffold template** (view/customize with `--init-proxy-file`):
+
+```ejs
+/* eslint-disable @typescript-eslint/no-unused-vars */
+/* This file is auto-generated by mcp-scanner. */
+
+// <mcp-scanner:proxy-imports:start>
+<%- methods.flatMap(m => m.importStatements).filter((v, i, a) => a.indexOf(v) === i).sort().join('\n') %>
+// <mcp-scanner:proxy-imports:end>
+
+// <mcp-scanner:proxy-class:start>
+export class <%- className %> {
+// <mcp-scanner:proxy-class:end>
+  // <mcp-scanner:proxy-methods:start>
+  // methods generated here
+  // <mcp-scanner:proxy-methods:end>
+}
+```
+
+You can also build your own template using the same EJS syntax and variable context.
+
+Notes:
+
+- Use `--package-json` and `--proxy-file` together when source and target libraries differ.
+- Use `--tools-tag` when multiple generators write to the same `languageModelTools` array.
+- On first run, if the proxy file does not exist, `mcp-scanner` creates it with markers.
+- On subsequent runs, only marker sections (imports, class, methods) are updated; manual code outside markers is preserved.
+- If the target file exists but has no method markers, generation stops to avoid destructive overwrite.
+- For local exported types declared in source files, generation uses package imports when source and target are in different packages (derived from the nearest source `package.json` name per file, including `--extra` projects), otherwise relative imports are used.
+- Local types must be `export`ed by the source package entrypoint to be importable from another package.
+
+Injection markers used by the generator:
+
+```ts
+// <mcp-scanner:proxy-imports:start>
+// ...auto-generated imports...
+// <mcp-scanner:proxy-imports:end>
+
+// <mcp-scanner:proxy-class:start>
+// ...class declaration...
+// <mcp-scanner:proxy-class:end>
+
+// <mcp-scanner:proxy-methods:start>
+// ...auto-generated methods...
+// <mcp-scanner:proxy-methods:end>
 ```
 
 ## How It Works
