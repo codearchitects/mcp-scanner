@@ -162,6 +162,8 @@ Then declare it in your extension's `package.json`:
 Used by code generators (e.g., proxy generation) to preserve tool metadata without exposing the method.
 Accepts the same options as `@ExposeTool` but does not register the method as a tool.
 
+`scanProject` recognises `@Tool` and derives `inputSchema` from the method parameter types exactly like `@ExposeTool` — so Library B (the proxy side) produces a fully-populated `contributes.languageModelTools` entry without any extra configuration.
+
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
 | `name` | `string` | ✅ | Unique tool name |
@@ -172,7 +174,8 @@ Accepts the same options as `@ExposeTool` but does not register the method as a 
 
 ### `registerExposedTools(context, instances)` — Runtime Registration
 
-Registers methods decorated with either `@ExposeTool` or `@Tool` as runtime LM tool handlers.
+Registers methods decorated with either `@ExposeTool` or `@Tool` as VS Code Language Model Tool handlers at runtime.
+Duplicate tool names within the same activation are skipped with a warning.
 This is useful for proxy-based architectures where generated proxy methods carry `@Tool` metadata.
 
 ### `scanProject(projectRoot, tsconfigFileName?)` — Scanner

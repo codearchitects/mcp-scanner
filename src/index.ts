@@ -2,7 +2,7 @@
 /*  mcp-scanner — public API                                           */
 /*                                                                     */
 /*  Exports:                                                           */
-/*    Decorator:  ExposeTool, getExposedTools, IExposeToolOptions       */
+/*    Decorator:  ExposeTool, getExposedTools, Tool, getTools, IExposeToolOptions, IToolOptions       */
 /*    Scanner:    scanProject, IScannedTool, IScanResult                */
 /*    Patcher:    patchPackageJsonFile, patchPackageJsonContent         */
 /*                                                                     */
@@ -14,8 +14,8 @@
  * Decorator exports.
  */
 // Decorator
-export { ExposeTool, getExposedTools } from './decorators';
-export type { IExposeToolEntry, IExposeToolOptions } from './decorators';
+export { ExposeTool, getExposedTools, Tool, getTools } from './decorators';
+export type { IExposeToolEntry, IExposeToolOptions, IToolEntry, IToolOptions } from './decorators';
 
 /**
  * Scanner exports.
