@@ -4,7 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
-## [1.1.1]
+## [1.1.2] - 2026-04-29
+
+### Fixed
+- Fixed incorrect package name in generated proxy scaffold: `@Tool` is now imported from `@codearchitects/mcp-scanner` instead of the bare `mcp-scanner` specifier.
+- Exported Tool decorator and getTools function
+
+## [1.1.1] - 2026-04-29
 
 ### Added
 - Added functions to extract and replace module specifiers in import statements.
@@ -40,6 +46,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Added
 - Initial release baseline.
 
+[1.1.2]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.2
 [1.1.1]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.1
 [1.1.0]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.0
 [1.0.3]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.0.3
