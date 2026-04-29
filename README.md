@@ -170,6 +170,11 @@ Accepts the same options as `@ExposeTool` but does not register the method as a 
 | `icon` | `string` | | VS Code codicon, e.g. `$(search)`. Default: `$(tools)` |
 | `canBeReferencedInPrompt` | `boolean` | | Allow `#tool` references. Default: `true` |
 
+### `registerExposedTools(context, instances)` — Runtime Registration
+
+Registers methods decorated with either `@ExposeTool` or `@Tool` as runtime LM tool handlers.
+This is useful for proxy-based architectures where generated proxy methods carry `@Tool` metadata.
+
 ### `scanProject(projectRoot, tsconfigFileName?)` — Scanner
 
 Returns `IScanResult` with discovered tools, file count, and diagnostics.

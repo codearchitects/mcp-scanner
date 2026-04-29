@@ -2,8 +2,8 @@
 /*  registerExposedTools — runtime bridge                              */
 /*                                                                     */
 /*  Given one or more class instances whose methods are decorated      */
-/*  with @ExposeTool, this function registers each decorated method    */
-/*  as a VS Code Language Model Tool via vscode.lm.registerTool().    */
+/*  with @ExposeTool or @Tool, this function registers each decorated  */
+/*  method as a VS Code Language Model Tool via vscode.lm.registerTool(). */
 /*                                                                     */
 /*  This is the RUNTIME counterpart to the CLI scanner:               */
 /*    - CLI scanner  → writes tool declarations into package.json     */
@@ -11,11 +11,11 @@
 /* ------------------------------------------------------------------ */
 
 import * as vscode from 'vscode';
-import { getExposedTools, type IExposeToolEntry } from '../decorators';
+import { getExposedTools, getTools, type IExposeToolEntry, type IToolEntry } from '../decorators';
 
 /**
- * Register all `@ExposeTool` decorated methods from one or more class
- * instances as VS Code Language Model Tools.
+ * Register all `@ExposeTool` and `@Tool` decorated methods from one or more
+ * class instances as VS Code Language Model Tools.
  *
  * Each decorated method becomes a tool that Copilot Chat can invoke.
  * The method receives the input parameters as its first argument and
@@ -33,7 +33,7 @@ import { getExposedTools, type IExposeToolEntry } from '../decorators';
  * ```
  *
  * @param context The VS Code extension context (disposables are pushed here).
- * @param instances One or more class instances with `@ExposeTool` methods.
+ * @param instances One or more class instances with `@ExposeTool`/`@Tool` methods.
  * @returns Array of disposables for all registered tools.
  */
 export function registerExposedTools(
@@ -46,17 +46,27 @@ export function registerExposedTools(
   }
 
   const disposables: vscode.Disposable[] = [];
+  const registeredToolNames = new Set<string>();
 
   for (const instance of instances) {
     const ctor = instance.constructor;
-    const entries: IExposeToolEntry[] = getExposedTools(ctor);
+    const exposedEntries: IExposeToolEntry[] = getExposedTools(ctor);
+    const toolEntries: IToolEntry[] = getTools(ctor);
+    const entries: Array<IExposeToolEntry | IToolEntry> = [...exposedEntries, ...toolEntries];
 
     if (entries.length === 0) {
-      console.log(`[mcp-scanner] No @ExposeTool methods found on ${ctor.name}`);
+      console.log(`[mcp-scanner] No @ExposeTool/@Tool methods found on ${ctor.name}`);
       continue;
     }
 
     for (const entry of entries) {
+      if (registeredToolNames.has(entry.name)) {
+        console.warn(
+          `[mcp-scanner] Tool "${entry.name}" already registered in this activation — skipping duplicate on ${ctor.name}.${entry.methodName}`,
+        );
+        continue;
+      }
+
       const method = (instance as Record<string, Function>)[entry.methodName];
       if (typeof method !== 'function') {
         console.warn(`[mcp-scanner] Method "${entry.methodName}" not found on ${ctor.name}`);
@@ -100,6 +110,7 @@ export function registerExposedTools(
 
       disposables.push(disposable);
       context.subscriptions.push(disposable);
+      registeredToolNames.add(entry.name);
       console.log(`[mcp-scanner] Registered LM tool: ${entry.name} (${ctor.name}.${entry.methodName})`);
     }
   }
