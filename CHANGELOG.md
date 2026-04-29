@@ -6,8 +6,12 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [1.1.2] - 2026-04-29
 
+### Added
+- `scanProject` now recognises `@Tool` decorated methods in addition to `@ExposeTool`, deriving `inputSchema` from the method parameter types using the TypeScript compiler — enabling Library B (proxy) to produce a correct `contributes.languageModelTools` entry with a fully-populated schema.
+- `registerExposedTools` now registers methods decorated with `@Tool` alongside `@ExposeTool`, with duplicate-name protection across the same activation.
+
 ### Fixed
-- Fixed incorrect package name in generated proxy scaffold: `@Tool` is now imported from `@codearchitects/mcp-scanner` instead of the bare `mcp-scanner` specifier.
+- Fixed incorrect package name in the generated proxy scaffold: `@Tool` is now imported from `@codearchitects/mcp-scanner` instead of the bare `mcp-scanner` specifier.
 - Exported Tool decorator and getTools function
 
 ## [1.1.1] - 2026-04-29

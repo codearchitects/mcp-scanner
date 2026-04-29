@@ -343,6 +343,28 @@ function getExposeToolArgs(decorator: ts.Decorator): ts.ObjectLiteralExpression 
 }
 
 /**
+ * Check whether a decorator call is `@Tool(...)` and extract the options object literal.
+ *
+ * @param decorator Decorator node to inspect.
+ * @returns Object literal argument for `@Tool(...)` when matched.
+ */
+function getToolArgs(decorator: ts.Decorator): ts.ObjectLiteralExpression | undefined {
+  if (!ts.isCallExpression(decorator.expression)) {
+    return undefined;
+  }
+  const expr = decorator.expression.expression;
+  const name = ts.isIdentifier(expr) ? expr.text : undefined;
+  if (name !== 'Tool') {
+    return undefined;
+  }
+  const firstArg = decorator.expression.arguments[0];
+  if (firstArg && ts.isObjectLiteralExpression(firstArg)) {
+    return firstArg;
+  }
+  return undefined;
+}
+
+/**
  * Extract a string property from an object literal expression.
  *
  * @param obj Object literal expression.
@@ -488,37 +510,64 @@ function visitNode(
       }
 
       for (const decorator of decorators) {
-        const argsObj = getExposeToolArgs(decorator);
-        if (!argsObj) {
+        // --- @ExposeTool path: derive schema from parameter type ---
+        const exposeArgsObj = getExposeToolArgs(decorator);
+        if (exposeArgsObj) {
+          const name = getStringProperty(exposeArgsObj, 'name');
+          const displayName = getStringProperty(exposeArgsObj, 'displayName');
+          const modelDescription = getStringProperty(exposeArgsObj, 'modelDescription');
+
+          if (!name || !displayName || !modelDescription) {
+            const className = node.name?.getText() ?? '<anonymous>';
+            const methodName = member.name?.getText() ?? '<unknown>';
+            diagnostics.push(
+              `@ExposeTool on ${className}.${methodName}: missing required property (name, displayName, or modelDescription).`,
+            );
+            continue;
+          }
+
+          const icon = getStringProperty(exposeArgsObj, 'icon') ?? '$(tools)';
+          const canBeReferencedInPrompt = getBooleanProperty(exposeArgsObj, 'canBeReferencedInPrompt') ?? true;
+          const inputSchema = extractInputSchema(member, checker);
+
+          tools.push({
+            name,
+            displayName,
+            modelDescription,
+            canBeReferencedInPrompt,
+            toolReferenceName: name,
+            icon,
+            inputSchema,
+          });
           continue;
         }
 
-        const name = getStringProperty(argsObj, 'name');
-        const displayName = getStringProperty(argsObj, 'displayName');
-        const modelDescription = getStringProperty(argsObj, 'modelDescription');
+        // --- @Tool path: derive schema from parameter types (same as @ExposeTool) ---
+        const toolArgsObj = getToolArgs(decorator);
+        if (toolArgsObj) {
+          const name = getStringProperty(toolArgsObj, 'name');
+          const displayName = getStringProperty(toolArgsObj, 'displayName');
+          const modelDescription = getStringProperty(toolArgsObj, 'modelDescription');
 
-        if (!name || !displayName || !modelDescription) {
-          const className = node.name?.getText() ?? '<anonymous>';
-          const methodName = member.name?.getText() ?? '<unknown>';
-          diagnostics.push(
-            `@ExposeTool on ${className}.${methodName}: missing required property (name, displayName, or modelDescription).`,
-          );
-          continue;
+          if (!name || !displayName || !modelDescription) {
+            // @Tool without required fields → skip silently (may be partial proxy)
+            continue;
+          }
+
+          const icon = getStringProperty(toolArgsObj, 'icon') ?? '$(tools)';
+          const canBeReferencedInPrompt = getBooleanProperty(toolArgsObj, 'canBeReferencedInPrompt') ?? true;
+          const inputSchema = extractInputSchema(member, checker);
+
+          tools.push({
+            name,
+            displayName,
+            modelDescription,
+            canBeReferencedInPrompt,
+            toolReferenceName: name,
+            icon,
+            inputSchema,
+          });
         }
-
-        const icon = getStringProperty(argsObj, 'icon') ?? '$(tools)';
-        const canBeReferencedInPrompt = getBooleanProperty(argsObj, 'canBeReferencedInPrompt') ?? true;
-        const inputSchema = extractInputSchema(member, checker);
-
-        tools.push({
-          name,
-          displayName,
-          modelDescription,
-          canBeReferencedInPrompt,
-          toolReferenceName: name,
-          icon,
-          inputSchema,
-        });
       }
     }
   }

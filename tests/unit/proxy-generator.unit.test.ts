@@ -251,7 +251,7 @@ ${METHODS_MARKER_END}
     const content = fs.readFileSync(outputFilePath, 'utf-8');
 
     // Verify @Tool decorator is generated with all metadata
-    expect(content).toContain("import { Tool } from 'mcp-scanner';");
+    expect(content).toContain("import { Tool } from '@codearchitects/mcp-scanner';");
     expect(content).toContain("@Tool({");
     expect(content).toContain("name: 'myTool',");
     expect(content).toContain("displayName: 'My Tool',");
