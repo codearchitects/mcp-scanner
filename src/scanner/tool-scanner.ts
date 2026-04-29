@@ -39,6 +39,17 @@ export interface IScanResult {
   diagnostics: string[];
 }
 
+function isWithinSearchPath(filePath: string, searchPath?: string): boolean {
+  if (!searchPath) {
+    return true;
+  }
+
+  const resolvedFile = path.resolve(filePath);
+  const resolvedSearch = path.resolve(searchPath);
+  const relative = path.relative(resolvedSearch, resolvedFile);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 /* ------------------------------------------------------------------ */
 /*  JSON Schema helpers                                                */
 /* ------------------------------------------------------------------ */
@@ -321,9 +332,14 @@ function extractInputSchema(
  *
  * @param projectRoot Absolute path to the project root (where tsconfig.json lives).
  * @param tsconfigFileName Optional tsconfig file name. Defaults to `tsconfig.json`.
+ * @param toolsSearchPath Optional path to restrict scanning to a specific subtree.
  * @returns Discovered tools + diagnostics.
  */
-export function scanProject(projectRoot: string, tsconfigFileName = 'tsconfig.json'): IScanResult {
+export function scanProject(
+  projectRoot: string,
+  tsconfigFileName = 'tsconfig.json',
+  toolsSearchPath?: string,
+): IScanResult {
   const diagnostics: string[] = [];
   const tools: IScannedTool[] = [];
 
@@ -351,6 +367,9 @@ export function scanProject(projectRoot: string, tsconfigFileName = 'tsconfig.js
       continue;
     }
     if (sourceFile.fileName.includes('node_modules')) {
+      continue;
+    }
+    if (!isWithinSearchPath(sourceFile.fileName, toolsSearchPath)) {
       continue;
     }
 

@@ -12,6 +12,7 @@ import { scanProject } from './scanner';
 interface CliArgs {
   projectRoot: string;
   tsconfigName: string;
+  toolsPath?: string;
   packageJsonPath?: string;
   proxyFilePath?: string;
   proxyClassName?: string;
@@ -26,6 +27,7 @@ function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
     projectRoot: process.cwd(),
     tsconfigName: 'tsconfig.json',
+    toolsPath: undefined,
     packageJsonPath: undefined,
     proxyFilePath: undefined,
     proxyClassName: undefined,
@@ -46,6 +48,10 @@ function parseArgs(argv: string[]): CliArgs {
       case '--tsconfig':
       case '-t':
         args.tsconfigName = argv[++i] ?? 'tsconfig.json';
+        break;
+      case '--tools-path':
+      case '-s':
+        args.toolsPath = argv[++i];
         break;
       case '--package-json':
       case '-j':
@@ -119,6 +125,8 @@ Usage:
 Options:
   --project, -p <path>    Project root directory (default: current directory)
   --tsconfig, -t <name>   tsconfig file name for the main project (default: tsconfig.json)
+  --tools-path, -s <path> Restrict scanning to this path subtree.
+                          Relative paths are resolved from --project.
   --package-json, -j <path>
                           package.json path to patch. Relative paths are
                           resolved from --project. (default: <project>/package.json)
@@ -159,6 +167,9 @@ How it works:
 
   console.log(`\n🔍 mcp-scanner — scanning ${args.projectRoot}`);
   console.log(`   tsconfig: ${args.tsconfigName}`);
+  if (args.toolsPath) {
+    console.log(`   tools path: ${args.toolsPath}`);
+  }
   if (args.packageJsonPath) {
     console.log(`   package.json: ${args.packageJsonPath}`);
   }
@@ -175,9 +186,17 @@ How it works:
   }
   console.log();
 
-  const result = scanProject(args.projectRoot, args.tsconfigName);
+  const result = scanProject(
+    args.projectRoot,
+    args.tsconfigName,
+    resolveFromProject(args.projectRoot, args.toolsPath),
+  );
   for (const extra of args.extraProjects) {
-    const extraResult = scanProject(extra.root, extra.tsconfig);
+    const extraResult = scanProject(
+      extra.root,
+      extra.tsconfig,
+      resolveFromProject(extra.root, args.toolsPath),
+    );
     result.tools.push(...extraResult.tools);
     result.filesScanned += extraResult.filesScanned;
     result.diagnostics.push(...extraResult.diagnostics.map((d) => `[${path.basename(extra.root)}] ${d}`));
@@ -213,9 +232,17 @@ How it works:
   }
 
   if (args.proxyFilePath) {
-    const proxyScan = scanProjectForProxies(args.projectRoot, args.tsconfigName);
+    const proxyScan = scanProjectForProxies(
+      args.projectRoot,
+      args.tsconfigName,
+      resolveFromProject(args.projectRoot, args.toolsPath),
+    );
     for (const extra of args.extraProjects) {
-      const extraProxyScan = scanProjectForProxies(extra.root, extra.tsconfig);
+      const extraProxyScan = scanProjectForProxies(
+        extra.root,
+        extra.tsconfig,
+        resolveFromProject(extra.root, args.toolsPath),
+      );
       proxyScan.methods.push(...extraProxyScan.methods);
       proxyScan.filesScanned += extraProxyScan.filesScanned;
       proxyScan.diagnostics.push(...extraProxyScan.diagnostics.map((d) => `[${path.basename(extra.root)}] ${d}`));

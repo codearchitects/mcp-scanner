@@ -30,6 +30,17 @@ interface IImportBinding {
   declarationText: string;
 }
 
+function isWithinSearchPath(filePath: string, searchPath?: string): boolean {
+  if (!searchPath) {
+    return true;
+  }
+
+  const resolvedFile = path.resolve(filePath);
+  const resolvedSearch = path.resolve(searchPath);
+  const relative = path.relative(resolvedSearch, resolvedFile);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 function getExposeToolArgs(decorator: ts.Decorator): ts.ObjectLiteralExpression | undefined {
   if (!ts.isCallExpression(decorator.expression)) {
     return undefined;
@@ -241,7 +252,11 @@ function toMethodImportData(
   };
 }
 
-export function scanProjectForProxies(projectRoot: string, tsconfigFileName = 'tsconfig.json'): IProxyScanResult {
+export function scanProjectForProxies(
+  projectRoot: string,
+  tsconfigFileName = 'tsconfig.json',
+  toolsSearchPath?: string,
+): IProxyScanResult {
   const diagnostics: string[] = [];
   const methods: IProxyMethod[] = [];
 
@@ -264,6 +279,9 @@ export function scanProjectForProxies(projectRoot: string, tsconfigFileName = 't
 
   for (const sourceFile of program.getSourceFiles()) {
     if (sourceFile.isDeclarationFile || sourceFile.fileName.includes('node_modules')) {
+      continue;
+    }
+    if (!isWithinSearchPath(sourceFile.fileName, toolsSearchPath)) {
       continue;
     }
 

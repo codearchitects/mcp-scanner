@@ -50,6 +50,9 @@ mcp-scanner
 # Or with options
 mcp-scanner --project /path/to/project --tsconfig tsconfig.json
 
+# Restrict scan only to a folder/subtree
+mcp-scanner --project /path/to/project --tools-path src/tools
+
 # Write to a specific package.json
 mcp-scanner --project /path/to/project --package-json ../apps/vscode-ext/package.json
 
@@ -185,6 +188,9 @@ mcp-scanner [options]
 
 --project, -p <path>    Project root (default: cwd)
 --tsconfig, -t <name>   tsconfig file name (default: tsconfig.json)
+--tools-path, -s <path>
+                      Restrict scanning to this path subtree.
+                      Relative paths are resolved from --project.
 --package-json, -j <path>
                       package.json path to patch.
                       Relative paths are resolved from --project.
