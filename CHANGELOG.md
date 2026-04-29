@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [1.1.1]
+
+### Added
+- Added functions to extract and replace module specifiers in import statements.
+- Added `@Tool` decorator to store method metadata without exposing proxy methods as tools.
+
+### Changed
+- Implemented relative import rewriting for generated proxy files.
+- Enhanced proxy generation to include tool metadata in generated methods.
+- Updated proxy scaffold template to conditionally emit `@Tool` based on available method metadata.
+- Extended runtime LM tool registration to support both `@ExposeTool` and `@Tool` decorated methods.
+
+### Fixed
+- Ensured grouped imports retain only symbols actually used by generated proxy method signatures.
+
 ## [1.1.0] - 2026-04-29
 
 ### Added
@@ -25,5 +40,6 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Added
 - Initial release baseline.
 
+[1.1.1]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.1
 [1.1.0]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.0
 [1.0.3]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.0.3

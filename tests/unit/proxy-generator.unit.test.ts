@@ -40,6 +40,7 @@ function buildMethod(sourceFilePath: string): IProxyMethod {
     parameters: [{ name: 'params', typeText: 'ILocal', optional: false }],
     importStatements: [],
     localTypeNames: ['ILocal'],
+    toolOptions: undefined,
   };
 }
 
@@ -165,4 +166,159 @@ ${METHODS_MARKER_END}
     const content = fs.readFileSync(outputFilePath, 'utf-8');
     expect(content).toContain("import type { ILocal } from '@scope/source';");
   });
+
+  it('rewrites relative signature imports to the proxy output location', () => {
+    const root = makeTempDir();
+    const sourceFilePath = path.join(root, 'src', 'features', 'services', 'tool-service.ts');
+    const outputFilePath = path.join(root, 'src', 'generated', 'generated-proxy.ts');
+
+    writeFile(path.join(root, 'src', 'hooks', 'index.ts'), 'export interface ISelectedArtifactSnapshot { id: string }\n');
+    writeFile(sourceFilePath, 'export interface ILocal { name: string }\n');
+    writeFile(path.join(root, 'scaffold.ejs'), scaffold);
+
+    const method = buildMethod(sourceFilePath);
+    method.importStatements = ["import type { ISelectedArtifactSnapshot } from '../../hooks';"];
+
+    const result = generateProxyFile([method], {
+      outputFilePath,
+      className: 'RewriteProxy',
+      scaffoldTemplatePath: path.join(root, 'scaffold.ejs'),
+      sourceProjectRoot: root,
+    });
+
+    expect(result.ok).toBe(true);
+    const content = fs.readFileSync(outputFilePath, 'utf-8');
+    expect(content).toContain("import type { ISelectedArtifactSnapshot } from '../hooks';");
+  });
+
+  it('rewrites relative signature imports to package root in cross-package output', () => {
+    const root = makeTempDir();
+    const sourcePackageRoot = path.join(root, 'packages', 'source');
+    const targetPackageRoot = path.join(root, 'packages', 'target');
+
+    const sourceFilePath = path.join(sourcePackageRoot, 'src', 'services', 'tool-service.ts');
+    const outputFilePath = path.join(targetPackageRoot, 'src', 'generated', 'generated-proxy.ts');
+
+    writeFile(path.join(sourcePackageRoot, 'package.json'), JSON.stringify({ name: '@scope/source' }));
+    writeFile(path.join(targetPackageRoot, 'package.json'), JSON.stringify({ name: '@scope/target' }));
+    writeFile(path.join(sourcePackageRoot, 'src', 'hooks', 'index.ts'), 'export interface ISelectedArtifactSnapshot { id: string }\n');
+    writeFile(sourceFilePath, 'export interface ILocal { name: string }\n');
+    writeFile(path.join(root, 'scaffold.ejs'), scaffold);
+
+    const method = buildMethod(sourceFilePath);
+    method.importStatements = ["import type { ISelectedArtifactSnapshot } from '../../hooks';"];
+
+    const result = generateProxyFile([method], {
+      outputFilePath,
+      className: 'CrossRewriteProxy',
+      scaffoldTemplatePath: path.join(root, 'scaffold.ejs'),
+      sourceProjectRoot: sourcePackageRoot,
+    });
+
+    expect(result.ok).toBe(true);
+    const content = fs.readFileSync(outputFilePath, 'utf-8');
+    expect(content).toContain("import type { ISelectedArtifactSnapshot } from '@scope/source';");
+  });
+
+  it('generates @Tool decorator in proxy methods with complete metadata', () => {
+    const root = makeTempDir();
+    const sourceFilePath = path.join(root, 'src', 'service.ts');
+    const outputFilePath = path.join(root, 'src', 'generated-proxy.ts');
+
+    writeFile(sourceFilePath, 'export interface ILocal { name: string }\n');
+
+    // Get the actual template from src/templates/proxy-scaffold.ejs
+    const templateSrc = path.join(__dirname, '../../src/templates/proxy-scaffold.ejs');
+    const templateContent = fs.readFileSync(templateSrc, 'utf-8');
+
+    const method = buildMethod(sourceFilePath);
+    method.toolOptions = {
+      name: 'myTool',
+      displayName: 'My Tool',
+      modelDescription: 'A tool that does something',
+      icon: '$(gear)',
+      canBeReferencedInPrompt: true,
+    };
+
+    const result = generateProxyFile([method], {
+      outputFilePath,
+      className: 'GeneratedProxy',
+      scaffoldTemplatePath: templateSrc,
+      sourceProjectRoot: root,
+    });
+
+    expect(result.ok).toBe(true);
+    const content = fs.readFileSync(outputFilePath, 'utf-8');
+
+    // Verify @Tool decorator is generated with all metadata
+    expect(content).toContain("import { Tool } from 'mcp-scanner';");
+    expect(content).toContain("@Tool({");
+    expect(content).toContain("name: 'myTool',");
+    expect(content).toContain("displayName: 'My Tool',");
+    expect(content).toContain("modelDescription: 'A tool that does something',");
+    expect(content).toContain("icon: '$(gear)',");
+    expect(content).toContain('canBeReferencedInPrompt: true,');
+  });
+
+  it('generates @Tool decorator without optional fields', () => {
+    const root = makeTempDir();
+    const sourceFilePath = path.join(root, 'src', 'service.ts');
+    const outputFilePath = path.join(root, 'src', 'generated-proxy.ts');
+
+    writeFile(sourceFilePath, 'export interface ILocal { name: string }\n');
+
+    const templateSrc = path.join(__dirname, '../../src/templates/proxy-scaffold.ejs');
+
+    const method = buildMethod(sourceFilePath);
+    method.toolOptions = {
+      name: 'simpleTool',
+      // Only required fields, optional fields absent
+    };
+
+    const result = generateProxyFile([method], {
+      outputFilePath,
+      className: 'GeneratedProxy',
+      scaffoldTemplatePath: templateSrc,
+      sourceProjectRoot: root,
+    });
+
+    expect(result.ok).toBe(true);
+    const content = fs.readFileSync(outputFilePath, 'utf-8');
+
+    // Verify @Tool decorator with only required field
+    expect(content).toContain("@Tool({");
+    expect(content).toContain("name: 'simpleTool',");
+    // Optional fields should not be present
+    expect(content).not.toContain('displayName:');
+    expect(content).not.toContain('modelDescription:');
+  });
+
+  it('omits @Tool decorator when toolOptions is undefined', () => {
+    const root = makeTempDir();
+    const sourceFilePath = path.join(root, 'src', 'service.ts');
+    const outputFilePath = path.join(root, 'src', 'generated-proxy.ts');
+
+    writeFile(sourceFilePath, 'export interface ILocal { name: string }\n');
+
+    const templateSrc = path.join(__dirname, '../../src/templates/proxy-scaffold.ejs');
+
+    const method = buildMethod(sourceFilePath);
+    // toolOptions is undefined (default from buildMethod)
+
+    const result = generateProxyFile([method], {
+      outputFilePath,
+      className: 'GeneratedProxy',
+      scaffoldTemplatePath: templateSrc,
+      sourceProjectRoot: root,
+    });
+
+    expect(result.ok).toBe(true);
+    const content = fs.readFileSync(outputFilePath, 'utf-8');
+
+    // Verify @Tool decorator is NOT present
+    expect(content).not.toContain('@Tool({');
+    // Method should have default signature
+    expect(content).toContain('public async run(params: ILocal): Promise<ILocal>');
+  });
 });
+

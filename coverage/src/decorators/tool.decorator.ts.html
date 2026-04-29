@@ -3,7 +3,7 @@
 <html lang="en">
 
 <head>
-    <title>Code coverage report for src/decorators/expose-tool.decorator.ts</title>
+    <title>Code coverage report for src/decorators/tool.decorator.ts</title>
     <meta charset="utf-8" />
     <link rel="stylesheet" href="../../prettify.css" />
     <link rel="stylesheet" href="../../base.css" />
@@ -19,7 +19,7 @@
 <body>
 <div class='wrapper'>
     <div class='pad1'>
-        <h1><a href="../../index.html">All files</a> / <a href="index.html">src/decorators</a> expose-tool.decorator.ts</h1>
+        <h1><a href="../../index.html">All files</a> / <a href="index.html">src/decorators</a> tool.decorator.ts</h1>
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
@@ -145,12 +145,18 @@
 <a name='L80'></a><a href='#L80'>80</a>
 <a name='L81'></a><a href='#L81'>81</a>
 <a name='L82'></a><a href='#L82'>82</a>
-<a name='L83'></a><a href='#L83'>83</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a>
+<a name='L85'></a><a href='#L85'>85</a>
+<a name='L86'></a><a href='#L86'>86</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -230,15 +236,17 @@
 <span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">import 'reflect-metadata';
 &nbsp;
 /* ------------------------------------------------------------------ */
-/*  Metadata key used to store tool definitions on the class prototype */
+/*  Metadata key used to store non-exposed tool definitions on methods */
 /* ------------------------------------------------------------------ */
-const EXPOSE_TOOL_KEY = Symbol('expose-tool');
+const TOOL_KEY = Symbol('tool');
 &nbsp;
 /**
- * Options for the {@link ExposeTool} method decorator.
- * Each decorated method becomes a VS Code Language Model Tool entry.
+ * Options for the {@link Tool} method decorator.
+ *
+ * Same structure as {@link IExposeToolOptions}, used to preserve metadata
+ * on proxy-generated methods without exposing them as tools.
  */
-export interface IExposeToolOptions {
+export interface IToolOptions {
   /**
    * Unique tool name (used as `name` and `toolReferenceName` in package.json).
    */
@@ -264,7 +272,7 @@ export interface IExposeToolOptions {
 /**
  * Internal record stored per decorated method.
  */
-export interface IExposeToolEntry extends IExposeToolOptions {
+export interface IToolEntry extends IToolOptions {
   /**
    * Name of the decorated method on the class.
    */
@@ -272,12 +280,16 @@ export interface IExposeToolEntry extends IExposeToolOptions {
 }
 &nbsp;
 /**
- * Method decorator that marks a method for automatic VS Code Language Model Tool generation.
+ * Method decorator that marks a method with tool metadata without exposing it.
+ *
+ * This decorator is used by code generators (e.g., proxy generation) to preserve
+ * the original tool metadata in proxy methods, without causing the proxy to be
+ * exposed as a tool itself.
  *
  * Usage:
  * ```ts
- * class MyService {
- *   @ExposeTool({
+ * class ProxyService {
+ *   @Tool({
  *     name: 'greetUser',
  *     displayName: 'Greet User',
  *     modelDescription: 'Say hello to a user by name.',
@@ -287,27 +299,24 @@ export interface IExposeToolEntry extends IExposeToolOptions {
  * }
  * ```
  *
- * The scanner reads these entries (via {@link getExposedTools}) and the parameter
- * interface (`IGreetUserParams`) to produce the `inputSchema` automatically.
- *
- * @param options - Tool metadata written into `package.json contributes.languageModelTools`.
+ * @param options - Tool metadata to preserve on the method.
  * @returns Method decorator storing metadata on the class constructor.
  */
-export function ExposeTool(options: IExposeToolOptions): MethodDecorator {
+export function Tool(options: IToolOptions): MethodDecorator {
   return (target: Object, propertyKey: string | symbol, _descriptor: PropertyDescriptor) =&gt; {
-    const existing: IExposeToolEntry[] = Reflect.getMetadata(EXPOSE_TOOL_KEY, target.constructor) ?? [];
+    const existing: IToolEntry[] = Reflect.getMetadata(TOOL_KEY, target.constructor) ?? [];
     existing.push({ ...options, methodName: String(propertyKey) });
-    Reflect.defineMetadata(EXPOSE_TOOL_KEY, existing, target.constructor);
+    Reflect.defineMetadata(TOOL_KEY, existing, target.constructor);
   };
 }
 &nbsp;
 /**
- * Retrieve all {@link IExposeToolEntry} entries registered on a class via {@link ExposeTool}.
+ * Retrieve all {@link IToolEntry} entries registered on a class via {@link Tool}.
  * @param target The class constructor.
  * @returns Registered tool metadata entries for the target class.
  */
-export function getExposedTools(target: Function): IExposeToolEntry[] {
-  return Reflect.getMetadata(EXPOSE_TOOL_KEY, target) ?? [];
+export function getTools(target: Function): IToolEntry[] {
+  return Reflect.getMetadata(TOOL_KEY, target) ?? [];
 }
 &nbsp;</pre></td></tr></table></pre>
 

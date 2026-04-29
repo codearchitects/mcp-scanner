@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ExposeTool, getExposedTools } from '../../src/decorators';
+import { ExposeTool, getExposedTools, Tool, getTools } from '../../src/decorators';
 
 interface ICalcInput {
   value: number;
@@ -54,5 +54,57 @@ describe('decorators', () => {
     }
 
     expect(getExposedTools(PlainService)).toEqual([]);
+  });
+});
+
+describe('@Tool decorator', () => {
+  it('stores decorated methods metadata on class constructor', () => {
+    class ProxyService {
+      @Tool({
+        name: 'proxySum',
+        displayName: 'Proxy Sum',
+        modelDescription: 'Proxy that sums value',
+      })
+      public sum(params: ICalcInput): number {
+        return params.value + 1;
+      }
+
+      @Tool({
+        name: 'proxyDouble',
+        displayName: 'Proxy Double',
+        modelDescription: 'Proxy that doubles value',
+        icon: '$(zap)',
+        canBeReferencedInPrompt: true,
+      })
+      public double(params: ICalcInput): number {
+        return params.value * 2;
+      }
+    }
+
+    const tools = getTools(ProxyService);
+
+    expect(tools).toHaveLength(2);
+    expect(tools[0]).toMatchObject({
+      name: 'proxySum',
+      displayName: 'Proxy Sum',
+      modelDescription: 'Proxy that sums value',
+      methodName: 'sum',
+    });
+    expect(tools[1]).toMatchObject({
+      name: 'proxyDouble',
+      icon: '$(zap)',
+      canBeReferencedInPrompt: true,
+      methodName: 'double',
+    });
+  });
+
+  it('returns empty metadata for non-decorated classes', () => {
+    class PlainService {
+      public run(): void {
+        // no-op
+      }
+    }
+
+    expect(getTools(PlainService)).toEqual([]);
   });
 });

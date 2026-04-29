@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as ts from 'typescript';
+import type { IExposeToolOptions } from './decorators';
 
 /**
  * Proxy method parameter metadata.
@@ -29,6 +30,12 @@ export interface IProxyMethod {
    * Tool name declared in `@ExposeTool({ name })`.
    */
   toolName: string;
+
+  /**
+   * Complete tool options from `@ExposeTool` for proxy decoration.
+   * Allows partial tool options since not all fields may be present in the source.
+   */
+  toolOptions?: Partial<IExposeToolOptions>;
 
   /**
    * Source method name.
@@ -101,9 +108,19 @@ interface IImportBinding {
   moduleSpecifier: string;
 
   /**
-   * Full normalized declaration text.
+   * Import style for this binding.
    */
-  declarationText: string;
+  kind: 'default' | 'named' | 'namespace';
+
+  /**
+   * Imported symbol name from module.
+   */
+  importedName?: string;
+
+  /**
+   * Local symbol name used in source file.
+   */
+  localName: string;
 }
 
 /**
@@ -159,6 +176,31 @@ function getStringProperty(obj: ts.ObjectLiteralExpression, name: string): strin
 
     if (ts.isStringLiteral(prop.initializer)) {
       return prop.initializer.text;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Read boolean property from object literal.
+ *
+ * @param obj Object literal expression.
+ * @param name Property name.
+ * @returns Boolean property value when found.
+ */
+function getBooleanProperty(obj: ts.ObjectLiteralExpression, name: string): boolean | undefined {
+  for (const prop of obj.properties) {
+    if (!ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name) || prop.name.text !== name) {
+      continue;
+    }
+
+    const init = prop.initializer;
+    if (init.kind === ts.SyntaxKind.TrueKeyword) {
+      return true;
+    }
+    if (init.kind === ts.SyntaxKind.FalseKeyword) {
+      return false;
     }
   }
 
@@ -257,10 +299,12 @@ function collectImportsMap(sourceFile: ts.SourceFile): Map<string, IImportBindin
       ? statement.moduleSpecifier.text
       : '';
 
-    const declarationText = normalizeToTypeImport(statement.getText(sourceFile));
-
     if (statement.importClause.name) {
-      imports.set(statement.importClause.name.text, { moduleSpecifier, declarationText });
+      imports.set(statement.importClause.name.text, {
+        moduleSpecifier,
+        kind: 'default',
+        localName: statement.importClause.name.text,
+      });
     }
 
     const namedBindings = statement.importClause.namedBindings;
@@ -269,16 +313,82 @@ function collectImportsMap(sourceFile: ts.SourceFile): Map<string, IImportBindin
     }
 
     if (ts.isNamespaceImport(namedBindings)) {
-      imports.set(namedBindings.name.text, { moduleSpecifier, declarationText });
+      imports.set(namedBindings.name.text, {
+        moduleSpecifier,
+        kind: 'namespace',
+        localName: namedBindings.name.text,
+      });
       continue;
     }
 
     for (const element of namedBindings.elements) {
-      imports.set(element.name.text, { moduleSpecifier, declarationText });
+      imports.set(element.name.text, {
+        moduleSpecifier,
+        kind: 'named',
+        importedName: element.propertyName?.text ?? element.name.text,
+        localName: element.name.text,
+      });
     }
   }
 
   return imports;
+}
+
+/**
+ * Build minimal import statements from referenced bindings.
+ *
+ * @param bindings Bindings used by method signature.
+ * @returns Type-only import statements containing only used symbols.
+ */
+function toImportStatements(bindings: IImportBinding[]): string[] {
+  const byModule = new Map<string, IImportBinding[]>();
+
+  for (const binding of bindings) {
+    const list = byModule.get(binding.moduleSpecifier) ?? [];
+    list.push(binding);
+    byModule.set(binding.moduleSpecifier, list);
+  }
+
+  const statements: string[] = [];
+
+  for (const [moduleSpecifier, moduleBindings] of byModule) {
+    const defaultImport = moduleBindings.find((binding) => binding.kind === 'default')?.localName;
+    const namespaceImport = moduleBindings.find((binding) => binding.kind === 'namespace')?.localName;
+    const namedBindings = moduleBindings
+      .filter((binding): binding is IImportBinding & { kind: 'named'; importedName: string } =>
+        binding.kind === 'named' && typeof binding.importedName === 'string',
+      )
+      .sort((a, b) => a.localName.localeCompare(b.localName));
+
+    if (namespaceImport) {
+      statements.push(`import type * as ${namespaceImport} from '${moduleSpecifier}';`);
+      continue;
+    }
+
+    const namedClause = namedBindings.length > 0
+      ? `{ ${namedBindings.map((binding) => (
+        binding.importedName === binding.localName
+          ? binding.importedName
+          : `${binding.importedName} as ${binding.localName}`
+      )).join(', ')} }`
+      : '';
+
+    if (defaultImport && namedClause) {
+      statements.push(`import type ${defaultImport}, ${namedClause} from '${moduleSpecifier}';`);
+      continue;
+    }
+
+    if (defaultImport) {
+      statements.push(`import type ${defaultImport} from '${moduleSpecifier}';`);
+      continue;
+    }
+
+    if (namedClause) {
+      statements.push(`import type ${namedClause} from '${moduleSpecifier}';`);
+    }
+  }
+
+  return statements.sort((a, b) => a.localeCompare(b));
 }
 
 /**
@@ -392,13 +502,13 @@ function toMethodImportData(
 ): { importStatements: string[]; localTypeNames: string[] } {
   const referenceNames = collectMethodTypeReferenceNames(method);
 
-  const declarationsByModule = new Map<string, string>();
+  const usedBindings = new Map<string, IImportBinding>();
   const localTypeNames = new Set<string>();
 
   for (const name of referenceNames) {
     const binding = importsMap.get(name);
     if (binding) {
-      declarationsByModule.set(binding.moduleSpecifier, binding.declarationText);
+      usedBindings.set(`${binding.moduleSpecifier}:${binding.kind}:${binding.localName}`, binding);
       continue;
     }
 
@@ -408,7 +518,7 @@ function toMethodImportData(
   }
 
   return {
-    importStatements: Array.from(declarationsByModule.values()).sort((a, b) => a.localeCompare(b)),
+    importStatements: toImportStatements(Array.from(usedBindings.values())),
     localTypeNames: Array.from(localTypeNames).sort((a, b) => a.localeCompare(b)),
   };
 }
@@ -487,12 +597,26 @@ export function scanProjectForProxies(
               continue;
             }
 
+            const displayName = getStringProperty(argsObj, 'displayName');
+            const modelDescription = getStringProperty(argsObj, 'modelDescription');
+            const icon = getStringProperty(argsObj, 'icon');
+            const canBeReferencedInPrompt = getBooleanProperty(argsObj, 'canBeReferencedInPrompt');
+
             const methodName = member.name?.getText(sourceFile) ?? 'unnamedMethod';
             const returnTypeText = member.type ? member.type.getText(sourceFile) : 'Promise<unknown>';
             const methodImportData = toMethodImportData(member, importsMap, exportedTypeNames);
 
+            const toolOptions: Partial<IExposeToolOptions> = {
+              name: toolName,
+              ...(displayName && { displayName }),
+              ...(modelDescription && { modelDescription }),
+              ...(icon && { icon }),
+              ...(canBeReferencedInPrompt !== undefined && { canBeReferencedInPrompt }),
+            };
+
             methods.push({
               toolName,
+              toolOptions,
               methodName,
               className,
               sourceFilePath: sourceFile.fileName,
