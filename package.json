@@ -36,6 +36,11 @@
     "build": "tsc && npm run copy-templates",
     "copy-templates": "node -e \"const fs = require('fs'); const path = require('path'); fs.mkdirSync('dist/templates', { recursive: true }); fs.copyFileSync('src/templates/proxy-scaffold.ejs', 'dist/templates/proxy-scaffold.ejs');\"",
     "watch": "tsc --watch",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:coverage": "vitest run --coverage",
+    "test:ci": "npm run test:coverage",
     "prepublishOnly": "npm run build",
     "clean": "rm -rf dist"
   },
@@ -66,7 +71,9 @@
     "@types/ejs": "^3.1.5",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.96.0",
-    "typescript": "^5.7.3"
+    "@vitest/coverage-v8": "^4.1.5",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.5"
   },
   "engines": {
     "node": ">=18.0.0"
