@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [1.1.4] - 2026-04-30
+
+### Added
+- Added `--exclude-path` / `-i` CLI option (repeatable) to exclude one or more folders/subtrees from scanning.
+- Applied exclusion filtering consistently to both tool scanning (`scanProject`) and proxy metadata scanning (`scanProjectForProxies`).
+
+### Documentation
+- Updated README usage examples and CLI options list to document `--exclude-path`.
+- Updated scanner API signature docs to include optional exclusion paths.
+
 ## [1.1.3] - 2026-04-29
 
 ### Fixed
@@ -55,6 +65,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Added
 - Initial release baseline.
 
+[1.1.4]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.4
 [1.1.3]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.3
 [1.1.2]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.2
 [1.1.1]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.1

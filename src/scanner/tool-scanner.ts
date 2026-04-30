@@ -95,6 +95,22 @@ function isWithinSearchPath(filePath: string, searchPath?: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+/**
+ * Check whether a source file is inside one of the excluded subtrees.
+ *
+ * @param filePath Candidate source file path.
+ * @param excludedPaths Subtree roots to exclude.
+ * @returns `true` when file should be skipped.
+ */
+function isWithinExcludedPaths(filePath: string, excludedPaths: string[]): boolean {
+  const resolvedFile = path.resolve(filePath);
+  return excludedPaths.some((excludedPath) => {
+    const resolvedExcluded = path.resolve(excludedPath);
+    const relative = path.relative(resolvedExcluded, resolvedFile);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /*  JSON Schema helpers                                                */
 /* ------------------------------------------------------------------ */
@@ -635,12 +651,14 @@ function extractInputSchema(
  * @param projectRoot Absolute path to the project root (where tsconfig.json lives).
  * @param tsconfigFileName Optional tsconfig file name. Defaults to `tsconfig.json`.
  * @param toolsSearchPath Optional path to restrict scanning to a specific subtree.
+ * @param excludedSearchPaths Optional paths to exclude from scanning.
  * @returns Discovered tools + diagnostics.
  */
 export function scanProject(
   projectRoot: string,
   tsconfigFileName = 'tsconfig.json',
   toolsSearchPath?: string,
+  excludedSearchPaths: string[] = [],
 ): IScanResult {
   const diagnostics: string[] = [];
   const tools: IScannedTool[] = [];
@@ -672,6 +690,9 @@ export function scanProject(
       continue;
     }
     if (!isWithinSearchPath(sourceFile.fileName, toolsSearchPath)) {
+      continue;
+    }
+    if (isWithinExcludedPaths(sourceFile.fileName, excludedSearchPaths)) {
       continue;
     }
 

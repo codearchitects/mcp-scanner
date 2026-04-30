@@ -29,6 +29,11 @@ interface CliArgs {
   toolsPath?: string;
 
   /**
+   * Optional subtree paths to exclude from scanning.
+   */
+  excludePaths: string[];
+
+  /**
    * Optional ownership tag for generated language model tools.
    */
   toolsTag?: string;
@@ -95,6 +100,7 @@ function parseArgs(argv: string[]): CliArgs {
     projectRoot: process.cwd(),
     tsconfigName: 'tsconfig.json',
     toolsPath: undefined,
+    excludePaths: [],
     toolsTag: undefined,
     packageJsonPath: undefined,
     proxyFilePath: undefined,
@@ -121,6 +127,14 @@ function parseArgs(argv: string[]): CliArgs {
       case '-s':
         args.toolsPath = argv[++i];
         break;
+      case '--exclude-path':
+      case '-i': {
+        const excludePath = argv[++i];
+        if (excludePath) {
+          args.excludePaths.push(excludePath);
+        }
+        break;
+      }
       case '--tools-tag':
       case '-g':
         args.toolsTag = argv[++i];
@@ -191,6 +205,19 @@ function resolveFromProject(projectRoot: string, maybePath?: string): string | u
 }
 
 /**
+ * Resolve multiple optional paths relative to a project root.
+ *
+ * @param projectRoot Root folder used for relative path resolution.
+ * @param maybePaths Optional absolute or relative paths.
+ * @returns Absolute paths for all provided values.
+ */
+function resolveManyFromProject(projectRoot: string, maybePaths: string[]): string[] {
+  return maybePaths
+    .map((p) => resolveFromProject(projectRoot, p))
+    .filter((p): p is string => !!p);
+}
+
+/**
  * Add generator ownership tags to scanned tools when `--tools-tag` is provided.
  *
  * @param tools Tools discovered by the scanner.
@@ -233,6 +260,9 @@ Options:
   --tsconfig, -t <name>   tsconfig file name for the main project (default: tsconfig.json)
   --tools-path, -s <path> Restrict scanning to this path subtree.
                           Relative paths are resolved from --project.
+  --exclude-path, -i <path>
+                          Exclude this path subtree from scanning.
+                          Can be repeated. Relative paths are resolved from --project.
   --tools-tag, -g <tag>   Tag generated tools and patch only tools with this tag.
                           If omitted, legacy state-based patching is used.
   --package-json, -j <path>
@@ -278,6 +308,11 @@ How it works:
   if (args.toolsPath) {
     console.log(`   tools path: ${args.toolsPath}`);
   }
+  if (args.excludePaths.length > 0) {
+    for (const excluded of args.excludePaths) {
+      console.log(`   exclude path: ${excluded}`);
+    }
+  }
   if (args.toolsTag) {
     console.log(`   tools tag: ${args.toolsTag}`);
   }
@@ -301,12 +336,14 @@ How it works:
     args.projectRoot,
     args.tsconfigName,
     resolveFromProject(args.projectRoot, args.toolsPath),
+    resolveManyFromProject(args.projectRoot, args.excludePaths),
   );
   for (const extra of args.extraProjects) {
     const extraResult = scanProject(
       extra.root,
       extra.tsconfig,
       resolveFromProject(extra.root, args.toolsPath),
+      resolveManyFromProject(extra.root, args.excludePaths),
     );
     result.tools.push(...extraResult.tools);
     result.filesScanned += extraResult.filesScanned;
@@ -349,12 +386,14 @@ How it works:
       args.projectRoot,
       args.tsconfigName,
       resolveFromProject(args.projectRoot, args.toolsPath),
+      resolveManyFromProject(args.projectRoot, args.excludePaths),
     );
     for (const extra of args.extraProjects) {
       const extraProxyScan = scanProjectForProxies(
         extra.root,
         extra.tsconfig,
         resolveFromProject(extra.root, args.toolsPath),
+        resolveManyFromProject(extra.root, args.excludePaths),
       );
       proxyScan.methods.push(...extraProxyScan.methods);
       proxyScan.filesScanned += extraProxyScan.filesScanned;

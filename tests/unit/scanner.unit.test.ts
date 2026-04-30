@@ -100,6 +100,38 @@ class Excluded {
     expect(result.tools.map((t) => t.name)).toEqual(['includedTool']);
   });
 
+  it('excludes tools in configured exclude subtrees', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'included', 'tool.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+interface IInput { value: string; }
+class Included {
+  @ExposeTool({ name: 'includedTool', displayName: 'Included', modelDescription: 'Included tool' })
+  run(input: IInput): string { return input.value; }
+}
+`);
+
+    writeFile(path.join(root, 'src', 'excluded', 'tool.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+interface IInput { value: string; }
+class Excluded {
+  @ExposeTool({ name: 'excludedTool', displayName: 'Excluded', modelDescription: 'Excluded tool' })
+  run(input: IInput): string { return input.value; }
+}
+`);
+
+    const result = scanProject(
+      root,
+      'tsconfig.json',
+      undefined,
+      [path.join(root, 'src', 'excluded')],
+    );
+
+    expect(result.tools.map((t) => t.name)).toEqual(['includedTool']);
+  });
+
   it('emits diagnostics for incomplete decorator metadata', () => {
     const root = makeTempDir();
     writeBaseProject(root);

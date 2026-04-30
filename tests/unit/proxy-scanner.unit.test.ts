@@ -95,6 +95,37 @@ class OutScope {
     expect(result.methods.map((m) => m.toolName)).toEqual(['inScope']);
   });
 
+  it('supports excluded subtrees filtering', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'in', 'service.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+interface IInput { value: string; }
+class InScope {
+  @ExposeTool({ name: 'inScope', displayName: 'In Scope', modelDescription: 'In scope' })
+  run(params: IInput): Promise<unknown> { return Promise.resolve(params.value); }
+}
+`);
+
+    writeFile(path.join(root, 'src', 'out', 'service.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+interface IInput { value: string; }
+class OutScope {
+  @ExposeTool({ name: 'outScope', displayName: 'Out Scope', modelDescription: 'Out scope' })
+  run(params: IInput): Promise<unknown> { return Promise.resolve(params.value); }
+}
+`);
+
+    const result = scanProjectForProxies(
+      root,
+      'tsconfig.json',
+      undefined,
+      [path.join(root, 'src', 'out')],
+    );
+    expect(result.methods.map((m) => m.toolName)).toEqual(['inScope']);
+  });
+
   it('keeps only used symbols from grouped imports', () => {
     const root = makeTempDir();
     writeBaseProject(root);

@@ -53,6 +53,25 @@ class ToolService {
   }
 }
 `);
+
+  writeFile(path.join(root, 'src', 'ignored', 'tool.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+
+export interface IIgnoredInput {
+  text: string;
+}
+
+class IgnoredService {
+  @ExposeTool({
+    name: 'ignoredTool',
+    displayName: 'Ignored Tool',
+    modelDescription: 'Must be excluded',
+  })
+  run(params: IIgnoredInput): Promise<IIgnoredInput> {
+    return Promise.resolve(params);
+  }
+}
+`);
 }
 
 describe('CLI integration', () => {
@@ -67,6 +86,7 @@ describe('CLI integration', () => {
       cliPath,
       '--project', root,
       '--proxy-file', proxyOutputPath,
+      '--exclude-path', 'src/ignored',
       '--tools-tag', 'fixture-tag',
     ], {
       cwd: process.cwd(),
@@ -82,6 +102,7 @@ describe('CLI integration', () => {
     const names = packageJson.contributes.languageModelTools.map((t) => t.name);
     expect(names).toContain('manualTool');
     expect(names).toContain('fixtureTool');
+    expect(names).not.toContain('ignoredTool');
 
     const generated = packageJson.contributes.languageModelTools.find((t) => t.name === 'fixtureTool');
     expect(generated?.tags).toContain('fixture-tag');
@@ -89,6 +110,7 @@ describe('CLI integration', () => {
 
     const proxyContent = fs.readFileSync(proxyOutputPath, 'utf-8');
     expect(proxyContent).toContain('fixtureTool');
+    expect(proxyContent).not.toContain('ignoredTool');
     expect(proxyContent).toContain('run(');
   });
 });

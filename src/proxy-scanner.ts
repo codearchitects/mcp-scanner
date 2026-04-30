@@ -142,6 +142,22 @@ function isWithinSearchPath(filePath: string, searchPath?: string): boolean {
 }
 
 /**
+ * Check whether file is under one of the excluded subtrees.
+ *
+ * @param filePath Candidate file path.
+ * @param excludedPaths Optional subtree roots to exclude.
+ * @returns `true` when file should be skipped.
+ */
+function isWithinExcludedPaths(filePath: string, excludedPaths: string[]): boolean {
+  const resolvedFile = path.resolve(filePath);
+  return excludedPaths.some((excludedPath) => {
+    const resolvedExcluded = path.resolve(excludedPath);
+    const relative = path.relative(resolvedExcluded, resolvedFile);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  });
+}
+
+/**
  * Extract `@ExposeTool({...})` options object from a decorator.
  *
  * @param decorator Decorator AST node.
@@ -529,12 +545,14 @@ function toMethodImportData(
  * @param projectRoot Project root folder.
  * @param tsconfigFileName Tsconfig file name.
  * @param toolsSearchPath Optional subtree filter.
+ * @param excludedSearchPaths Optional subtrees to exclude.
  * @returns Proxy scan result.
  */
 export function scanProjectForProxies(
   projectRoot: string,
   tsconfigFileName = 'tsconfig.json',
   toolsSearchPath?: string,
+  excludedSearchPaths: string[] = [],
 ): IProxyScanResult {
   const diagnostics: string[] = [];
   const methods: IProxyMethod[] = [];
@@ -561,6 +579,9 @@ export function scanProjectForProxies(
       continue;
     }
     if (!isWithinSearchPath(sourceFile.fileName, toolsSearchPath)) {
+      continue;
+    }
+    if (isWithinExcludedPaths(sourceFile.fileName, excludedSearchPaths)) {
       continue;
     }
 

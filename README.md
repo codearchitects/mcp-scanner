@@ -53,6 +53,9 @@ mcp-scanner --project /path/to/project --tsconfig tsconfig.json
 # Restrict scan only to a folder/subtree
 mcp-scanner --project /path/to/project --tools-path src/tools
 
+# Exclude one or more folders/subtrees from scan
+mcp-scanner --project /path/to/project --exclude-path src/generated --exclude-path src/legacy
+
 # Tag-scoped patching: only tools with this tag are replaced on rerun
 mcp-scanner --project /path/to/project --tools-tag core
 
@@ -178,7 +181,7 @@ Registers methods decorated with either `@ExposeTool` or `@Tool` as VS Code Lang
 Duplicate tool names within the same activation are skipped with a warning.
 This is useful for proxy-based architectures where generated proxy methods carry `@Tool` metadata.
 
-### `scanProject(projectRoot, tsconfigFileName?)` — Scanner
+### `scanProject(projectRoot, tsconfigFileName?, toolsSearchPath?, excludedSearchPaths?)` — Scanner
 
 Returns `IScanResult` with discovered tools, file count, and diagnostics.
 
@@ -217,6 +220,9 @@ mcp-scanner [options]
 --tools-path, -s <path>
                       Restrict scanning to this path subtree.
                       Relative paths are resolved from --project.
+--exclude-path, -i <path>
+                      Exclude this path subtree from scanning.
+                      Can be repeated. Relative paths are resolved from --project.
 --tools-tag, -g <tag>
                       Tag generated tools and patch only tools with this tag.
                       If omitted, legacy state-based patching is used.
