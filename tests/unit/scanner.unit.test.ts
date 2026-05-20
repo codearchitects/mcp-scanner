@@ -214,7 +214,7 @@ class Advanced {
     expect(schema.properties.values2.type).toBe('array');
     expect((schema.properties.values2.items as Record<string, unknown>).type).toBe('number');
     expect(schema.properties.status.enum).toEqual(['ok', 'ko']);
-    expect(Array.isArray(schema.properties.choice.oneOf)).toBe(true);
+    expect(Array.isArray(schema.properties.choice.anyOf)).toBe(true);
     expect(schema.properties.amount.enum).toEqual([5]);
     expect(schema.properties.literalFlag.type).toBe('boolean');
     expect(schema.properties.bag.type).toBe('object');
@@ -478,12 +478,12 @@ class MixedService {
 
     const scanned = result.tools[0];
     const schema = scanned.inputSchema as {
-      properties: Record<string, { oneOf?: any[] }>;
+      properties: Record<string, { anyOf?: any[] }>;
     };
 
-    // Mixed union should have oneOf
-    expect(Array.isArray(schema.properties.value.oneOf)).toBe(true);
-    expect(schema.properties.value.oneOf.length).toBeGreaterThanOrEqual(3);
+    // Mixed union should have anyOf
+    expect(Array.isArray(schema.properties.value.anyOf)).toBe(true);
+    expect(schema.properties.value.anyOf.length).toBeGreaterThanOrEqual(3);
   });
 
   it('handles literal boolean type in schema generation', () => {
@@ -590,7 +590,7 @@ class AllTypesService {
     expect(schema.properties.boolArray.items.type).toBe('boolean');
 
     // Union
-    expect(schema.properties.mixedUnion.oneOf).toBeDefined();
+    expect(schema.properties.mixedUnion.anyOf).toBeDefined();
 
     // Record type
     expect(schema.properties.dictField.type).toBe('object');
@@ -598,5 +598,51 @@ class AllTypesService {
     // Verify required fields (optional fields should not be in required)
     expect(schema.required).toContain('stringField');
     expect(schema.required).not.toContain('emptyOptional');
+  });
+
+  it('emits anyOf for UpdateNodeParams newValue primitive union', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'update-node.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+
+interface UpdateNodeParams {
+  nodeId: string;
+  changes: {
+    propertyKey: string;
+    newValue?: string | number | boolean;
+  }[];
+}
+
+class UpdateNodeService {
+  @ExposeTool({
+    name: 'updateNode',
+    displayName: 'Update Node',
+    modelDescription: 'Update node properties',
+  })
+  update(input: UpdateNodeParams): Promise<void> {
+    return Promise.resolve();
+  }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.tools).toHaveLength(1);
+
+    const scanned = result.tools[0];
+    const schema = scanned.inputSchema as {
+      properties: Record<string, any>;
+    };
+
+    const newValueSchema = schema.properties.changes.items.properties.newValue as {
+      anyOf?: Array<Record<string, unknown>>;
+    };
+
+    expect(Array.isArray(newValueSchema.anyOf)).toBe(true);
+    expect(newValueSchema.anyOf?.some((s) => s.type === 'string')).toBe(true);
+    expect(newValueSchema.anyOf?.some((s) => s.type === 'number')).toBe(true);
+    expect(newValueSchema.anyOf?.some((s) => s.type === 'boolean')).toBe(true);
   });
 });

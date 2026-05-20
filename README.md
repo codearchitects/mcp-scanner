@@ -396,6 +396,7 @@ The `@Tool` decorator is automatically imported from `mcp-scanner` in the proxy 
 5. Resolves the first parameter's type into a JSON Schema (`inputSchema`)
    - Interfaces → `{ type: "object", properties: {...}, required: [...] }`
    - String unions → `{ type: "string", enum: [...] }`
+   - Mixed-type unions (e.g. `string | number | boolean`) → `{ anyOf: [...] }`
    - Arrays, nested types, JSDoc descriptions — all handled
 6. Replaces previously generated tools in `package.json` `contributes.languageModelTools`
 7. Persists generated ownership to `.mcp-scanner.state.json`

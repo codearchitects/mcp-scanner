@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [1.1.5] - 2026-05-20
+
+### Fixed
+- Changed JSON Schema generation for mixed-type unions (`string | number | boolean`) from `oneOf` to `anyOf`, fixing validation errors when LM tools pass boolean values to primitive union parameters.
+
 ## [1.1.4] - 2026-04-30
 
 ### Added
@@ -65,6 +70,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Added
 - Initial release baseline.
 
+[1.1.5]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.5
 [1.1.4]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.4
 [1.1.3]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.3
 [1.1.2]: https://github.com/codearchitects/mcp-scanner/releases/tag/v1.1.2

@@ -159,7 +159,7 @@ function typeToJsonSchemaObject(
       } else if (nonUndefinedTypes.length > 1) {
         // Optional union
         propSchema = {
-          oneOf: nonUndefinedTypes.map((t) => typeToJsonSchemaFromType(t, checker, visited)),
+          anyOf: nonUndefinedTypes.map((t) => typeToJsonSchemaFromType(t, checker, visited)),
         };
       } else {
         // Only undefined (shouldn't happen, but handle it)
@@ -259,7 +259,7 @@ function typeToJsonSchemaFromType(
 
     // Mixed union
     return {
-      oneOf: unionType.types.map((t) => typeToJsonSchemaFromType(t, checker, visited)),
+      anyOf: unionType.types.map((t) => typeToJsonSchemaFromType(t, checker, visited)),
     };
   }
 
@@ -385,7 +385,7 @@ function typeNodeToJsonSchema(
       };
     }
     return {
-      oneOf: typeNode.types.map((t) => typeNodeToJsonSchema(t, checker, visited)),
+      anyOf: typeNode.types.map((t) => typeNodeToJsonSchema(t, checker, visited)),
     };
   }
 
