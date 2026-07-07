@@ -182,6 +182,52 @@ class MixedTools {
     expect(manifestB.tools.map((t) => t.name)).toEqual(['mcpB']);
   });
 
+  it('skips package.json patching when --skip-package-json is passed', () => {
+    const root = makeTempDir();
+
+    writeFile(path.join(root, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022',
+        module: 'commonjs',
+        strict: true,
+        experimentalDecorators: true,
+        emitDecoratorMetadata: true,
+      },
+      include: ['src/**/*.ts'],
+    }, null, 2));
+
+    writeFile(path.join(root, 'package.json'), JSON.stringify({
+      name: 'skip-pkg-fixture',
+      version: '1.0.0',
+      contributes: { languageModelTools: [] },
+    }, null, 2));
+
+    writeFile(path.join(root, 'src', 'tools.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+export interface IInput { text: string; }
+class Tools {
+  @ExposeTool({ name: 'myTool', displayName: 'My Tool', modelDescription: 'A tool' })
+  run(params: IInput): Promise<IInput> { return Promise.resolve(params); }
+}
+`);
+
+    const cliPath = path.join(process.cwd(), 'dist', 'cli.js');
+    const result = spawnSync(process.execPath, [
+      cliPath,
+      '--project', root,
+      '--skip-package-json',
+    ], { cwd: process.cwd(), encoding: 'utf-8' });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('skipped');
+
+    // Verify package.json was NOT modified
+    const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8')) as {
+      contributes: { languageModelTools: unknown[] };
+    };
+    expect(packageJson.contributes.languageModelTools).toEqual([]);
+  });
+
   it('uses --tools-tag as the MCP server group when tools declare no mcpServers', () => {
     const root = makeTempDir();
 

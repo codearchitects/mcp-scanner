@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [1.2.1] - 2026-07-07
+
+### Added
+- Added `--skip-package-json` / `-k` CLI option to skip patching `package.json`. Useful when only generating proxy files or writing MCP manifests without modifying the package manifest.
+
 ## [1.2.0] - 2026-07-07
 
 ### Added

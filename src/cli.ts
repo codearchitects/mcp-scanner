@@ -65,6 +65,11 @@ interface CliArgs {
   defaultTransport?: ToolTransport[];
 
   /**
+   * Whether to skip patching package.json (useful when only generating proxy files).
+   */
+  skipPackageJsonPatch: boolean;
+
+  /**
    * Optional output proxy file path.
    */
   proxyFilePath?: string;
@@ -126,6 +131,7 @@ function parseArgs(argv: string[]): CliArgs {
     packageJsonPath: undefined,
     mcpManifests: [],
     defaultTransport: undefined,
+    skipPackageJsonPatch: false,
     proxyFilePath: undefined,
     proxyClassName: undefined,
     scaffoldTemplatePath: undefined,
@@ -215,6 +221,10 @@ function parseArgs(argv: string[]): CliArgs {
         args.extraProjects.push({ root: path.resolve(extraPath), tsconfig: extraTsconfig });
         break;
       }
+      case '--skip-package-json':
+      case '-k':
+        args.skipPackageJsonPatch = true;
+        break;
       case '--dry-run':
       case '-d':
         args.dryRun = true;
@@ -403,6 +413,9 @@ Options:
   --scaffold-template, -x <path>
                           Custom EJS scaffold template path.
                           Relative paths are resolved from --project.
+  --skip-package-json, -k
+                          Skip patching package.json. Useful when only generating
+                          proxy files or writing MCP manifests.
   --init-proxy-file <path>
                           Copy the default proxy file scaffold to the specified file
                           and exit. You can then customize it (class name, etc.) before using
@@ -573,7 +586,12 @@ How it works:
   // Emit MCP manifests for tools targeting the `mcp` transport.
   writeMcpManifests(result.tools, args);
 
-  // Patch package.json only with tools targeting the `lm` transport.
+  // Patch package.json only with tools targeting the `lm` transport (unless skipped).
+  if (args.skipPackageJsonPatch) {
+    console.log('⊘ package.json patching skipped (--skip-package-json).');
+    process.exit(0);
+  }
+
   const lmTools = result.tools.filter((tool) => tool.transports.includes('lm'));
   if (lmTools.length === 0) {
     console.log(

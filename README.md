@@ -268,6 +268,8 @@ mcp-scanner [options]
 --init-proxy-file <path>
                       Copy default complete proxy scaffold template.
                       Recommended extension: .ejs
+--skip-package-json, -k Skip patching package.json. Useful when only generating
+                      proxy files or writing MCP manifests.
 --extra, -e <path> [tsconfig]
                         Additional project root to scan (repeatable)
 --dry-run, -d           Preview without writing
