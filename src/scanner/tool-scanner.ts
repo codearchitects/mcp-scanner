@@ -14,6 +14,14 @@ import * as ts from 'typescript';
 /* ------------------------------------------------------------------ */
 
 /**
+ * Transport a tool can be published to.
+ *
+ * - `'lm'`  → `contributes.languageModelTools` in package.json (VS Code LM tool).
+ * - `'mcp'` → MCP manifest sidecar consumed by embedded MCP servers.
+ */
+export type ToolTransport = 'lm' | 'mcp';
+
+/**
  * A single tool definition ready to be written into
  * `contributes.languageModelTools` in package.json.
  */
@@ -57,6 +65,18 @@ export interface IScannedTool {
    * Optional tool tags used for grouping/filtering.
    */
   tags?: string[];
+
+  /**
+   * Transports this tool should be published to. Always populated by the
+   * scanner (defaults to `['lm']` when the decorator omits it).
+   */
+  transports: ToolTransport[];
+
+  /**
+   * Names of the MCP server groups this tool belongs to.
+   * Only relevant when {@link transports} includes `'mcp'`.
+   */
+  mcpServers?: string[];
 }
 
 /**
@@ -607,6 +627,49 @@ function getBooleanProperty(obj: ts.ObjectLiteralExpression, name: string): bool
   return undefined;
 }
 
+/**
+ * Extract a string-array property (array literal of string literals) from an
+ * object literal expression.
+ *
+ * @param obj Object literal expression.
+ * @param name Property name to read.
+ * @returns Array of string values when property exists and is an array literal.
+ */
+function getStringArrayProperty(obj: ts.ObjectLiteralExpression, name: string): string[] | undefined {
+  for (const prop of obj.properties) {
+    if (ts.isPropertyAssignment(prop) && prop.name && ts.isIdentifier(prop.name) && prop.name.text === name) {
+      if (!ts.isArrayLiteralExpression(prop.initializer)) {
+        return undefined;
+      }
+      const values: string[] = [];
+      for (const element of prop.initializer.elements) {
+        if (ts.isStringLiteral(element)) {
+          values.push(element.text);
+        }
+      }
+      return values;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Normalize an authored `transports` array into a valid, de-duplicated list,
+ * falling back to a default when omitted or empty/invalid.
+ *
+ * @param authored Raw values read from the decorator.
+ * @param fallback Default transports applied when nothing valid was authored.
+ * @returns Validated transport list.
+ */
+function normalizeTransports(authored: string[] | undefined, fallback: ToolTransport[]): ToolTransport[] {
+  if (!authored) {
+    return [...fallback];
+  }
+  const valid = authored.filter((t): t is ToolTransport => t === 'lm' || t === 'mcp');
+  const unique = Array.from(new Set(valid));
+  return unique.length > 0 ? unique : [...fallback];
+}
+
 /* ------------------------------------------------------------------ */
 /*  Parameter type extraction                                          */
 /* ------------------------------------------------------------------ */
@@ -646,12 +709,24 @@ function extractInputSchema(
 /* ------------------------------------------------------------------ */
 
 /**
+ * Options controlling {@link scanProject} behavior.
+ */
+export interface IScanOptions {
+  /**
+   * Transports applied to tools whose decorator omits `transports`.
+   * Defaults to `['lm']`, preserving the historical behavior.
+   */
+  defaultTransport?: ToolTransport[];
+}
+
+/**
  * Scan a TypeScript project for `@ExposeTool` decorated methods.
  *
  * @param projectRoot Absolute path to the project root (where tsconfig.json lives).
  * @param tsconfigFileName Optional tsconfig file name. Defaults to `tsconfig.json`.
  * @param toolsSearchPath Optional path to restrict scanning to a specific subtree.
  * @param excludedSearchPaths Optional paths to exclude from scanning.
+ * @param options Optional scan behavior switches.
  * @returns Discovered tools + diagnostics.
  */
 export function scanProject(
@@ -659,7 +734,11 @@ export function scanProject(
   tsconfigFileName = 'tsconfig.json',
   toolsSearchPath?: string,
   excludedSearchPaths: string[] = [],
+  options: IScanOptions = {},
 ): IScanResult {
+  const defaultTransport: ToolTransport[] = options.defaultTransport && options.defaultTransport.length > 0
+    ? options.defaultTransport
+    : ['lm'];
   const diagnostics: string[] = [];
   const tools: IScannedTool[] = [];
 
@@ -697,7 +776,7 @@ export function scanProject(
     }
 
     filesScanned++;
-    ts.forEachChild(sourceFile, (node) => visitNode(node, checker, tools, diagnostics));
+    ts.forEachChild(sourceFile, (node) => visitNode(node, checker, tools, diagnostics, defaultTransport));
   }
 
   return { tools, filesScanned, diagnostics };
@@ -717,6 +796,7 @@ function visitNode(
   checker: ts.TypeChecker,
   tools: IScannedTool[],
   diagnostics: string[],
+  defaultTransport: ToolTransport[],
 ): void {
   if (ts.isClassDeclaration(node)) {
     for (const member of node.members) {
@@ -748,6 +828,8 @@ function visitNode(
 
           const icon = getStringProperty(exposeArgsObj, 'icon') ?? '$(tools)';
           const canBeReferencedInPrompt = getBooleanProperty(exposeArgsObj, 'canBeReferencedInPrompt') ?? true;
+          const transports = normalizeTransports(getStringArrayProperty(exposeArgsObj, 'transports'), defaultTransport);
+          const mcpServers = getStringArrayProperty(exposeArgsObj, 'mcpServers');
           const inputSchema = extractInputSchema(member, checker);
 
           tools.push({
@@ -758,6 +840,8 @@ function visitNode(
             toolReferenceName: name,
             icon,
             inputSchema,
+            transports,
+            ...(mcpServers && mcpServers.length > 0 ? { mcpServers } : {}),
           });
           continue;
         }
@@ -776,6 +860,8 @@ function visitNode(
 
           const icon = getStringProperty(toolArgsObj, 'icon') ?? '$(tools)';
           const canBeReferencedInPrompt = getBooleanProperty(toolArgsObj, 'canBeReferencedInPrompt') ?? true;
+          const transports = normalizeTransports(getStringArrayProperty(toolArgsObj, 'transports'), defaultTransport);
+          const mcpServers = getStringArrayProperty(toolArgsObj, 'mcpServers');
           const inputSchema = extractInputSchema(member, checker);
 
           tools.push({
@@ -786,6 +872,8 @@ function visitNode(
             toolReferenceName: name,
             icon,
             inputSchema,
+            transports,
+            ...(mcpServers && mcpServers.length > 0 ? { mcpServers } : {}),
           });
         }
       }
@@ -793,5 +881,5 @@ function visitNode(
   }
 
   // Recurse into nested nodes (e.g., modules)
-  ts.forEachChild(node, (child) => visitNode(child, checker, tools, diagnostics));
+  ts.forEachChild(node, (child) => visitNode(child, checker, tools, diagnostics, defaultTransport));
 }

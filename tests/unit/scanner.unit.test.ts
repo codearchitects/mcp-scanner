@@ -645,4 +645,71 @@ class UpdateNodeService {
     expect(newValueSchema.anyOf?.some((s) => s.type === 'number')).toBe(true);
     expect(newValueSchema.anyOf?.some((s) => s.type === 'boolean')).toBe(true);
   });
+
+  it('defaults transports to ["lm"] when the decorator omits it', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'tool.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+interface IInput { value: string; }
+class ToolService {
+  @ExposeTool({ name: 'lmTool', displayName: 'LM Tool', modelDescription: 'Default transport' })
+  run(input: IInput): string { return input.value; }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.tools).toHaveLength(1);
+    expect(result.tools[0].transports).toEqual(['lm']);
+    expect(result.tools[0].mcpServers).toBeUndefined();
+  });
+
+  it('reads explicit transports and mcpServers from the decorator', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'tool.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+interface IInput { value: string; }
+class ToolService {
+  @ExposeTool({
+    name: 'mcpTool',
+    displayName: 'MCP Tool',
+    modelDescription: 'MCP-only tool',
+    transports: ['mcp'],
+    mcpServers: ['serverA', 'serverB'],
+  })
+  run(input: IInput): string { return input.value; }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.tools).toHaveLength(1);
+    expect(result.tools[0].transports).toEqual(['mcp']);
+    expect(result.tools[0].mcpServers).toEqual(['serverA', 'serverB']);
+  });
+
+  it('applies defaultTransport option to tools without explicit transports', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'tool.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+interface IInput { value: string; }
+class ToolService {
+  @ExposeTool({ name: 'implicit', displayName: 'Implicit', modelDescription: 'No transports' })
+  run(input: IInput): string { return input.value; }
+
+  @ExposeTool({ name: 'explicit', displayName: 'Explicit', modelDescription: 'Has transports', transports: ['lm'] })
+  run2(input: IInput): string { return input.value; }
+}
+`);
+
+    const result = scanProject(root, 'tsconfig.json', undefined, [], { defaultTransport: ['mcp'] });
+    const implicit = result.tools.find((t) => t.name === 'implicit');
+    const explicit = result.tools.find((t) => t.name === 'explicit');
+    expect(implicit?.transports).toEqual(['mcp']);
+    expect(explicit?.transports).toEqual(['lm']);
+  });
 });

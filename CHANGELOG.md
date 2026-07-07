@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [1.2.0] - 2026-07-07
+
+### Added
+- Added a `transports` option (`'lm' | 'mcp'`) to `@ExposeTool`/`@Tool` so a tool can be published as a VS Code Language Model tool, as an MCP tool, or both. Defaults to `['lm']`, preserving existing behavior.
+- Added an `mcpServers` option to route tools into one or more **named MCP server groups**, enabling multiple MCP servers within a single project.
+- MCP server group resolution now falls back to the CLI `--tools-tag` when a tool declares no `mcpServers`, so tag-scoped scans (`-g <tag>`) route to the matching MCP server without decorator changes. Precedence: `mcpServers` → `--tools-tag` → `default`.
+- Added MCP manifest generation: `'mcp'`-targeting tools are written to a fully-generated JSON sidecar (default `.mcp-scanner.mcp.json`), carrying the native MCP `inputSchema`, instead of `package.json`.
+- Added CLI options `--mcp-manifest, -m <[name=]path>` (repeatable, binds a server group to its manifest file) and `--default-transport <lm|mcp|both>`.
+- Added public API: `writeMcpManifestFile`, `serializeMcpManifest`, `readMcpManifestFile`, `groupMcpToolsByServer`, `mcpServerGroupsOf`, `targetsMcp`, `MCP_MANIFEST_FILE`, `DEFAULT_MCP_SERVER_GROUP`, plus types `IMcpManifest`, `IMcpManifestTool`, `IMcpManifestResult`, `IScanOptions`, `ToolTransport`.
+- Added an optional `options` argument to `scanProject` (`defaultTransport`).
+
+### Changed
+- `patchPackageJsonContent`/`patchPackageJsonFile` now only write tools targeting the `'lm'` transport into `contributes.languageModelTools`, and strip internal routing fields (`transports`, `mcpServers`) from manifest entries. Tools without `transports` are treated as `'lm'`, so behavior is unchanged for existing projects.
+- `registerExposedTools` now registers only tools targeting the `'lm'` transport; `'mcp'`-only tools are skipped.
+
 ## [1.1.5] - 2026-05-20
 
 ### Fixed

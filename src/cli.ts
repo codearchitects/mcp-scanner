@@ -6,8 +6,9 @@
 import * as path from 'path';
 import { copyDefaultScaffoldTemplateToLocal, generateProxyFile } from './proxy-generator';
 import { AUTOGEN_STATE_FILE, patchPackageJsonFile } from './patcher';
+import { DEFAULT_MCP_SERVER_GROUP, groupMcpToolsByServer, writeMcpManifestFile } from './mcp-manifest';
 import { scanProjectForProxies } from './proxy-scanner';
-import { IScannedTool, scanProject } from './scanner';
+import { IScannedTool, ToolTransport, scanProject } from './scanner';
 
 /**
  * Parsed CLI arguments used by the `mcp-scanner` command.
@@ -42,6 +43,26 @@ interface CliArgs {
    * Optional package.json path to patch.
    */
   packageJsonPath?: string;
+
+  /**
+   * MCP manifest outputs, keyed by server group name.
+   */
+  mcpManifests: Array<{
+    /**
+     * MCP server group name (`default` when unnamed).
+     */
+    server: string;
+
+    /**
+     * Output manifest path (resolved relative to `--project`).
+     */
+    path: string;
+  }>;
+
+  /**
+   * Default transports applied to tools whose decorator omits `transports`.
+   */
+  defaultTransport?: ToolTransport[];
 
   /**
    * Optional output proxy file path.
@@ -103,6 +124,8 @@ function parseArgs(argv: string[]): CliArgs {
     excludePaths: [],
     toolsTag: undefined,
     packageJsonPath: undefined,
+    mcpManifests: [],
+    defaultTransport: undefined,
     proxyFilePath: undefined,
     proxyClassName: undefined,
     scaffoldTemplatePath: undefined,
@@ -143,6 +166,30 @@ function parseArgs(argv: string[]): CliArgs {
       case '-j':
         args.packageJsonPath = argv[++i];
         break;
+      case '--mcp-manifest':
+      case '-m': {
+        const raw = argv[++i];
+        if (raw) {
+          const eq = raw.indexOf('=');
+          if (eq > 0) {
+            args.mcpManifests.push({ server: raw.slice(0, eq).trim(), path: raw.slice(eq + 1) });
+          } else {
+            args.mcpManifests.push({ server: DEFAULT_MCP_SERVER_GROUP, path: raw });
+          }
+        }
+        break;
+      }
+      case '--default-transport': {
+        const value = (argv[++i] ?? '').trim().toLowerCase();
+        if (value === 'lm') {
+          args.defaultTransport = ['lm'];
+        } else if (value === 'mcp') {
+          args.defaultTransport = ['mcp'];
+        } else if (value === 'both') {
+          args.defaultTransport = ['lm', 'mcp'];
+        }
+        break;
+      }
       case '--proxy-file':
       case '-o':
         args.proxyFilePath = argv[++i];
@@ -240,6 +287,79 @@ function applyToolsTag(tools: IScannedTool[], toolsTag?: string): IScannedTool[]
 }
 
 /**
+ * Build a map from configured MCP server group name to its resolved output path.
+ *
+ * @param args Parsed CLI arguments.
+ * @returns Map of server group → absolute manifest path.
+ */
+function resolveConfiguredMcpManifests(args: CliArgs): Map<string, string> {
+  const configured = new Map<string, string>();
+  for (const manifest of args.mcpManifests) {
+    const resolved = resolveFromProject(args.projectRoot, manifest.path);
+    if (resolved) {
+      configured.set(manifest.server, resolved);
+    }
+  }
+  return configured;
+}
+
+/**
+ * Write MCP manifest files for tools targeting the `mcp` transport.
+ *
+ * Each configured server group is written (empty when it has no tools this run,
+ * so stale entries are cleared). Tools whose group has no configured output are
+ * reported and skipped.
+ *
+ * @param tools Scanned tools (mixed transports allowed).
+ * @param args Parsed CLI arguments.
+ */
+function writeMcpManifests(tools: IScannedTool[], args: CliArgs): void {
+  const groups = groupMcpToolsByServer(tools, args.toolsTag ?? DEFAULT_MCP_SERVER_GROUP);
+  const configured = resolveConfiguredMcpManifests(args);
+
+  if (groups.size === 0 && configured.size === 0) {
+    return;
+  }
+
+  for (const [server, groupTools] of groups) {
+    if (!configured.has(server)) {
+      console.log(
+        `⚠️  ${groupTools.length} tool(s) target MCP server '${server}' but no --mcp-manifest was configured for it. Skipped.`,
+      );
+    }
+  }
+
+  for (const [server, outPath] of configured) {
+    const groupTools = groups.get(server) ?? [];
+    const res = writeMcpManifestFile(outPath, groupTools, server);
+    if (res.ok) {
+      console.log(`✅ ${res.message}`);
+    } else {
+      console.error(`❌ ${res.message}`);
+    }
+  }
+}
+
+/**
+ * Preview MCP manifest generation without writing files (dry-run mode).
+ *
+ * @param tools Scanned tools (mixed transports allowed).
+ * @param args Parsed CLI arguments.
+ */
+function previewMcpManifests(tools: IScannedTool[], args: CliArgs): void {
+  const groups = groupMcpToolsByServer(tools, args.toolsTag ?? DEFAULT_MCP_SERVER_GROUP);
+  if (groups.size === 0 && args.mcpManifests.length === 0) {
+    return;
+  }
+
+  console.log('\n📋 MCP manifests (dry run — no file written):');
+  for (const [server, groupTools] of groups) {
+    const target = args.mcpManifests.find((m) => m.server === server)?.path ?? '(no --mcp-manifest configured)';
+    console.log(`   ${server} → ${target}: ${groupTools.length} tool(s)`);
+  }
+}
+
+/**
  * Execute the `mcp-scanner` CLI workflow.
  *
  * @returns Nothing. Exits process with appropriate status code.
@@ -268,6 +388,14 @@ Options:
   --package-json, -j <path>
                           package.json path to patch. Relative paths are
                           resolved from --project. (default: <project>/package.json)
+  --mcp-manifest, -m <[name=]path>
+                          Emit an MCP manifest for tools targeting the 'mcp'
+                          transport. Use 'name=path' to bind a named MCP server
+                          group to its own file (repeatable); a bare path targets
+                          the 'default' group. Relative paths resolved from --project.
+  --default-transport <lm|mcp|both>
+                          Default transport for tools whose decorator omits
+                          'transports'. (default: lm)
   --proxy-file, -o <path> Generate proxy methods into this file.
                           Relative paths are resolved from --project.
   --proxy-class, -c <name> Class name for generated proxies.
@@ -319,6 +447,14 @@ How it works:
   if (args.packageJsonPath) {
     console.log(`   package.json: ${args.packageJsonPath}`);
   }
+  if (args.defaultTransport) {
+    console.log(`   default transport: ${args.defaultTransport.join(', ')}`);
+  }
+  if (args.mcpManifests.length > 0) {
+    for (const manifest of args.mcpManifests) {
+      console.log(`   mcp manifest: ${manifest.server} → ${manifest.path}`);
+    }
+  }
   if (args.proxyFilePath) {
     console.log(`   proxy file: ${args.proxyFilePath}`);
   }
@@ -332,11 +468,13 @@ How it works:
   }
   console.log();
 
+  const scanOptions = { defaultTransport: args.defaultTransport };
   const result = scanProject(
     args.projectRoot,
     args.tsconfigName,
     resolveFromProject(args.projectRoot, args.toolsPath),
     resolveManyFromProject(args.projectRoot, args.excludePaths),
+    scanOptions,
   );
   for (const extra of args.extraProjects) {
     const extraResult = scanProject(
@@ -344,6 +482,7 @@ How it works:
       extra.tsconfig,
       resolveFromProject(extra.root, args.toolsPath),
       resolveManyFromProject(extra.root, args.excludePaths),
+      scanOptions,
     );
     result.tools.push(...extraResult.tools);
     result.filesScanned += extraResult.filesScanned;
@@ -375,6 +514,7 @@ How it works:
   if (args.dryRun) {
     console.log('📋 Generated JSON (dry run — no file written):\n');
     console.log(JSON.stringify(result.tools, null, 2));
+    previewMcpManifests(result.tools, args);
     if (args.proxyFilePath) {
       console.log('\n📋 Proxy generation enabled (dry run): no proxy file written.');
     }
@@ -430,15 +570,24 @@ How it works:
     console.log(`   Generated proxy methods: ${proxyScan.methods.length}`);
   }
 
-  if (result.tools.length === 0) {
-    console.log('No @ExposeTool methods eligible for package.json patch.');
+  // Emit MCP manifests for tools targeting the `mcp` transport.
+  writeMcpManifests(result.tools, args);
+
+  // Patch package.json only with tools targeting the `lm` transport.
+  const lmTools = result.tools.filter((tool) => tool.transports.includes('lm'));
+  if (lmTools.length === 0) {
+    console.log(
+      result.tools.length === 0
+        ? 'No @ExposeTool methods eligible for package.json patch.'
+        : 'No tools target the "lm" transport — package.json not modified.',
+    );
     process.exit(0);
   }
 
   const packageJsonPath = resolveFromProject(args.projectRoot, args.packageJsonPath)
     ?? path.join(args.projectRoot, 'package.json');
 
-  const patchResult = patchPackageJsonFile(packageJsonPath, result.tools, { toolTag: args.toolsTag });
+  const patchResult = patchPackageJsonFile(packageJsonPath, lmTools, { toolTag: args.toolsTag });
   if (patchResult.ok) {
     console.log(`✅ ${patchResult.message}`);
   } else {

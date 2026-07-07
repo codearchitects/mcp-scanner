@@ -60,6 +60,14 @@ export function registerExposedTools(
     }
 
     for (const entry of entries) {
+      // Only tools targeting the `lm` transport become VS Code Language Model
+      // tools. Tools omitting `transports` default to `['lm']` (back-compat);
+      // `mcp`-only tools are skipped here and served by an MCP server instead.
+      const transports = entry.transports ?? ['lm'];
+      if (!transports.includes('lm')) {
+        continue;
+      }
+
       if (registeredToolNames.has(entry.name)) {
         console.warn(
           `[mcp-scanner] Tool "${entry.name}" already registered in this activation — skipping duplicate on ${ctor.name}.${entry.methodName}`,

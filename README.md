@@ -159,6 +159,8 @@ Then declare it in your extension's `package.json`:
 | `modelDescription` | `string` | ✅ | Description for the language model |
 | `icon` | `string` | | VS Code codicon, e.g. `$(search)`. Default: `$(tools)` |
 | `canBeReferencedInPrompt` | `boolean` | | Allow `#tool` references. Default: `true` |
+| `transports` | `('lm' \| 'mcp')[]` | | Where to publish the tool. `'lm'` → `package.json`; `'mcp'` → MCP manifest sidecar. Default: `['lm']` |
+| `mcpServers` | `string[]` | | Names of the MCP server groups the tool belongs to (only when `transports` includes `'mcp'`). Overrides the CLI `--tools-tag`. Omitted → the CLI `--tools-tag`, else the `default` group |
 
 ### `Tool(options)` — Method Decorator
 
@@ -174,16 +176,32 @@ Accepts the same options as `@ExposeTool` but does not register the method as a 
 | `modelDescription` | `string` | ✅ | Description for the language model |
 | `icon` | `string` | | VS Code codicon, e.g. `$(search)`. Default: `$(tools)` |
 | `canBeReferencedInPrompt` | `boolean` | | Allow `#tool` references. Default: `true` |
+| `transports` | `('lm' \| 'mcp')[]` | | Where to publish the tool. Default: `['lm']` |
+| `mcpServers` | `string[]` | | MCP server groups the tool belongs to. Omitted → the `default` group |
 
 ### `registerExposedTools(context, instances)` — Runtime Registration
 
 Registers methods decorated with either `@ExposeTool` or `@Tool` as VS Code Language Model Tool handlers at runtime.
+Only tools whose `transports` includes `'lm'` are registered (tools omitting `transports` default to `['lm']`); `'mcp'`-only tools are skipped so they can be served by an MCP server instead.
 Duplicate tool names within the same activation are skipped with a warning.
 This is useful for proxy-based architectures where generated proxy methods carry `@Tool` metadata.
 
-### `scanProject(projectRoot, tsconfigFileName?, toolsSearchPath?, excludedSearchPaths?)` — Scanner
+### `scanProject(projectRoot, tsconfigFileName?, toolsSearchPath?, excludedSearchPaths?, options?)` — Scanner
 
 Returns `IScanResult` with discovered tools, file count, and diagnostics.
+Each tool carries `transports` (always populated; defaults to `['lm']`) and optional `mcpServers`.
+`options.defaultTransport` overrides the transport applied to tools whose decorator omits it.
+
+### MCP manifest helpers
+
+For `'mcp'`-targeting tools, mcp-scanner emits a fully-generated JSON sidecar per MCP server group:
+
+- `writeMcpManifestFile(path, tools, serverName?)` — write a manifest to disk.
+- `serializeMcpManifest(tools, serverName?)` — build the manifest JSON string.
+- `readMcpManifestFile(path)` — runtime loader for MCP servers (returns `IMcpManifest`).
+- `groupMcpToolsByServer(tools)` — group scanned tools by their MCP server group.
+
+The manifest entries carry the native MCP `inputSchema` (JSON Schema), so an embedded MCP server can answer `tools/list` directly without reading `package.json`.
 
 ### `patchPackageJsonFile(path, tools, options?)` — File Patcher
 
@@ -230,6 +248,14 @@ mcp-scanner [options]
                       package.json path to patch.
                       Relative paths are resolved from --project.
                       (default: <project>/package.json)
+--mcp-manifest, -m <[name=]path>
+                      Emit an MCP manifest for tools targeting the 'mcp' transport.
+                      Use 'name=path' to bind a named MCP server group to its own
+                      file (repeatable); a bare path targets the 'default' group.
+                      Relative paths are resolved from --project.
+--default-transport <lm|mcp|both>
+                      Default transport for tools whose decorator omits
+                      'transports'. (default: lm)
 --proxy-file, -o <path>
                       Generate proxy methods into this file.
                       Relative paths are resolved from --project.
@@ -387,6 +413,86 @@ class MyProxyClass {
 The `@Tool` decorator is automatically imported from `mcp-scanner` in the proxy file's imports section.
 
 
+## MCP Tools (serve the same tools over MCP)
+
+The same `@ExposeTool`/`@Tool` metadata that drives VS Code Language Model tools can also feed an
+embedded **MCP server** — write the handler once, serve it via both the VS Code LM API and MCP.
+
+By default a tool targets the `lm` transport (goes into `package.json`). To serve a tool over MCP,
+set its `transports`. A tool can target one or both:
+
+```typescript
+class MyService {
+  // VS Code LM tool only (default) — goes into contributes.languageModelTools
+  @ExposeTool({ name: 'lmTool', displayName: 'LM Tool', modelDescription: '...' })
+  lmTool(params: IInput): string { /* ... */ }
+
+  // MCP only — NOT exposed as a VS Code LM tool
+  @ExposeTool({ name: 'mcpTool', displayName: 'MCP Tool', modelDescription: '...', transports: ['mcp'] })
+  mcpTool(params: IInput): string { /* ... */ }
+
+  // Both transports
+  @ExposeTool({ name: 'shared', displayName: 'Shared', modelDescription: '...', transports: ['lm', 'mcp'] })
+  shared(params: IInput): string { /* ... */ }
+}
+```
+
+Tools targeting `mcp` are written to a **fully-generated JSON manifest** (`.mcp-scanner.mcp.json` by
+convention) instead of `package.json`. `mcp`-only tools never appear in `contributes.languageModelTools`,
+so VS Code does not expose them as LM tools. The manifest carries the native MCP `inputSchema`.
+
+### Multiple MCP servers in one project
+
+A project can host several MCP servers. Assign each tool to one or more **named server groups** with
+`mcpServers`, then bind each group to its own manifest file with `--mcp-manifest name=path` (repeatable):
+
+```typescript
+@ExposeTool({ name: 'toolA', /* ... */ transports: ['mcp'], mcpServers: ['serverA'] })
+@ExposeTool({ name: 'toolB', /* ... */ transports: ['mcp'], mcpServers: ['serverB'] })
+```
+
+```bash
+mcp-scanner \
+  --mcp-manifest serverA=./mcp/server-a.mcp.json \
+  --mcp-manifest serverB=./mcp/server-b.mcp.json
+```
+
+The MCP server group of a tool is resolved with this precedence:
+
+1. explicit `mcpServers` on the decorator (per-method / multi-server routing), else
+2. the CLI `--tools-tag` / `-g` value, else
+3. the `default` group.
+
+So a per-subtree scan tagged with `-g caip` automatically routes its tools to the `caip` MCP server — no
+decorator changes needed. This mirrors how `-g` already groups tools for tag-scoped `package.json` patching:
+
+```bash
+mcp-scanner -s src/services/modeler-tools.ts -g caip \
+  --default-transport mcp --mcp-manifest caip=./mcp/caip.mcp.json
+```
+
+A tool that omits both `mcpServers` and `-g` falls into the `default` group (bind it with a bare
+`--mcp-manifest ./tools.mcp.json`). A tool listing multiple `mcpServers` is written into each of their manifests.
+
+For a whole project that should be MCP-only, use `--default-transport mcp` so every tool defaults to the
+`mcp` transport without annotating each method.
+
+### Reading the manifest at runtime
+
+An embedded MCP server can load the manifest to answer `tools/list` without parsing `package.json`:
+
+```typescript
+import { readMcpManifestFile } from '@codearchitects/mcp-scanner';
+
+const manifest = readMcpManifestFile('.mcp-scanner.mcp.json');
+for (const tool of manifest?.tools ?? []) {
+  // tool.name, tool.modelDescription, tool.inputSchema (JSON Schema) → MCP tools/list
+}
+```
+
+The manifest is a fully-generated artifact: it is overwritten on every run (no manual entries are preserved),
+unlike `package.json` where manually-added tools are kept.
+
 ## How It Works
 
 1. Loads the project's `tsconfig.json` and creates a TypeScript program
@@ -398,8 +504,8 @@ The `@Tool` decorator is automatically imported from `mcp-scanner` in the proxy 
    - String unions → `{ type: "string", enum: [...] }`
    - Mixed-type unions (e.g. `string | number | boolean`) → `{ anyOf: [...] }`
    - Arrays, nested types, JSDoc descriptions — all handled
-6. Replaces previously generated tools in `package.json` `contributes.languageModelTools`
-7. Persists generated ownership to `.mcp-scanner.state.json`
+6. Routes each tool by its `transports`: `'lm'` tools are written into `package.json` `contributes.languageModelTools`; `'mcp'` tools are written into per-server MCP manifest files
+7. Replaces previously generated `'lm'` tools in `package.json` and persists generated ownership to `.mcp-scanner.state.json`
 
 ## License
 

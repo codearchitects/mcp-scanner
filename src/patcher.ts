@@ -191,6 +191,11 @@ export function patchPackageJsonContent(
 
   const root = parsed as Record<string, unknown>;
 
+  // package.json is the LM-tool store: only tools targeting the `lm` transport
+  // are written here. Tools omitting `transports` default to `['lm']`, so the
+  // historical behavior is preserved. `mcp`-only tools go to an MCP manifest.
+  const lmTools = generatedTools.filter((tool) => (tool.transports ?? ['lm']).includes('lm'));
+
   const contributesRaw = root.contributes;
   const contributes: Record<string, unknown> = isRecord(contributesRaw) ? contributesRaw : {};
 
@@ -228,14 +233,18 @@ export function patchPackageJsonContent(
     manualTools.push(entry);
   }
 
-  const generatedEntries: unknown[] = generatedTools.map((tool) => {
+  const generatedEntries: unknown[] = lmTools.map((tool) => {
+    // Strip routing-only fields — they are internal to mcp-scanner and must not
+    // appear in the VS Code `languageModelTools` manifest entries.
+    const { transports: _transports, mcpServers: _mcpServers, ...entry } = tool;
+
     if (!toolTag) {
-      return { ...tool };
+      return entry;
     }
 
-    const mergedTags = Array.from(new Set([...(tool.tags ?? []), toolTag, 'generated-by-mcp-scanner']));
+    const mergedTags = Array.from(new Set([...(entry.tags ?? []), toolTag, 'generated-by-mcp-scanner']));
     return {
-      ...tool,
+      ...entry,
       tags: mergedTags,
     };
   });
@@ -243,15 +252,15 @@ export function patchPackageJsonContent(
 
   root.contributes = contributes;
 
-  const nextGeneratedToolNames = generatedTools.map((tool) => tool.name);
+  const nextGeneratedToolNames = lmTools.map((tool) => tool.name);
 
   return {
     content: `${JSON.stringify(root, null, 2)}\n`,
     result: {
       ok: true,
       message: toolTag
-        ? `Patched package.json with ${generatedTools.length} auto-generated tool(s) for tag '${toolTag}'.`
-        : `Patched package.json with ${generatedTools.length} auto-generated tool(s).`,
+        ? `Patched package.json with ${lmTools.length} auto-generated tool(s) for tag '${toolTag}'.`
+        : `Patched package.json with ${lmTools.length} auto-generated tool(s).`,
     },
     nextGeneratedToolNames,
   };

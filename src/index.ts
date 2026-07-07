@@ -22,7 +22,7 @@ export type { IExposeToolEntry, IExposeToolOptions, IToolEntry, IToolOptions } f
  */
 // Scanner
 export { scanProject } from './scanner';
-export type { IScannedTool, IScanResult } from './scanner';
+export type { IScannedTool, IScanOptions, IScanResult, ToolTransport } from './scanner';
 
 /**
  * Patcher exports.
@@ -30,4 +30,20 @@ export type { IScannedTool, IScanResult } from './scanner';
 // Patcher
 export { AUTOGEN_STATE_FILE, MARKER_END, MARKER_START, patchPackageJsonContent, patchPackageJsonFile } from './patcher';
 export type { IPatchResult } from './patcher';
+
+/**
+ * MCP manifest exports.
+ */
+// MCP manifest
+export {
+  DEFAULT_MCP_SERVER_GROUP,
+  MCP_MANIFEST_FILE,
+  groupMcpToolsByServer,
+  mcpServerGroupsOf,
+  readMcpManifestFile,
+  serializeMcpManifest,
+  targetsMcp,
+  writeMcpManifestFile,
+} from './mcp-manifest';
+export type { IMcpManifest, IMcpManifestResult, IMcpManifestTool } from './mcp-manifest';
 

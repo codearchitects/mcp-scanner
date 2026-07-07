@@ -5,7 +5,7 @@ import { AUTOGEN_STATE_FILE, patchPackageJsonContent, patchPackageJsonFile } fro
 import type { IScannedTool } from '../../src/scanner';
 import { makeTempDir, writeFile } from '../helpers/tmp';
 
-function tool(name: string, tags?: string[]): IScannedTool {
+function tool(name: string, tags?: string[], transports: Array<'lm' | 'mcp'> = ['lm']): IScannedTool {
   return {
     name,
     displayName: name,
@@ -15,6 +15,7 @@ function tool(name: string, tags?: string[]): IScannedTool {
     icon: '$(tools)',
     inputSchema: { type: 'object', properties: {} },
     tags,
+    transports,
   };
 }
 
@@ -95,6 +96,33 @@ describe('patcher', () => {
     const result = patchPackageJsonFile(path.join(root, 'missing.json'), [tool('generated')]);
     expect(result.ok).toBe(false);
     expect(result.message).toContain('File not found');
+  });
+
+  it('excludes mcp-only tools from package.json and its strips routing fields', () => {
+    const raw = JSON.stringify({
+      name: 'sample',
+      contributes: { languageModelTools: [] },
+    });
+
+    const result = patchPackageJsonContent(raw, [
+      tool('lmTool', undefined, ['lm']),
+      tool('mcpOnly', undefined, ['mcp']),
+      tool('both', undefined, ['lm', 'mcp']),
+    ]);
+
+    const parsed = JSON.parse(result.content) as {
+      contributes: { languageModelTools: Array<Record<string, unknown>> };
+    };
+    const names = parsed.contributes.languageModelTools.map((t) => t.name);
+
+    expect(names).toEqual(['lmTool', 'both']);
+    expect(names).not.toContain('mcpOnly');
+    // Routing-only fields must not leak into the manifest entries.
+    for (const entry of parsed.contributes.languageModelTools) {
+      expect(entry.transports).toBeUndefined();
+      expect(entry.mcpServers).toBeUndefined();
+    }
+    expect(result.nextGeneratedToolNames).toEqual(['lmTool', 'both']);
   });
 
   it('ignores malformed state file and still patches package json', () => {

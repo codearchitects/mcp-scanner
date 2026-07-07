@@ -32,6 +32,23 @@ export interface IToolOptions {
    * Whether the tool can be referenced in a prompt with `#`. Defaults to `true`.
    */
   canBeReferencedInPrompt?: boolean;
+  /**
+   * Transports this tool should be published to.
+   *
+   * - `'lm'` → written into `contributes.languageModelTools` (VS Code LM tool).
+   * - `'mcp'` → written into an MCP manifest sidecar for embedded MCP servers.
+   *
+   * Defaults to `['lm']`, preserving the historical behavior.
+   */
+  transports?: Array<'lm' | 'mcp'>;
+  /**
+   * Names of the MCP server groups this tool belongs to.
+   *
+   * Only meaningful when `transports` includes `'mcp'`. Lets a single project
+   * split tools across multiple MCP servers, each emitted into its own named
+   * manifest file. When omitted, the tool falls into the default MCP server group.
+   */
+  mcpServers?: string[];
 }
 
 /**
