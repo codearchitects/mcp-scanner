@@ -124,21 +124,24 @@ interface IImportBinding {
 }
 
 /**
- * Check whether file is under optional search subtree.
+ * Check whether file is under any of the optional search subtrees.
  *
  * @param filePath Candidate file path.
- * @param searchPath Optional subtree root.
+ * @param searchPaths Optional subtree root(s).
  * @returns `true` when file should be scanned.
  */
-function isWithinSearchPath(filePath: string, searchPath?: string): boolean {
-  if (!searchPath) {
+function isWithinSearchPath(filePath: string, searchPaths?: string | string[]): boolean {
+  const list = searchPaths == null ? [] : Array.isArray(searchPaths) ? searchPaths : [searchPaths];
+  if (list.length === 0) {
     return true;
   }
 
   const resolvedFile = path.resolve(filePath);
-  const resolvedSearch = path.resolve(searchPath);
-  const relative = path.relative(resolvedSearch, resolvedFile);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  return list.some((searchPath) => {
+    const resolvedSearch = path.resolve(searchPath);
+    const relative = path.relative(resolvedSearch, resolvedFile);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  });
 }
 
 /**
@@ -544,14 +547,14 @@ function toMethodImportData(
  *
  * @param projectRoot Project root folder.
  * @param tsconfigFileName Tsconfig file name.
- * @param toolsSearchPath Optional subtree filter.
+ * @param toolsSearchPath Optional subtree filter(s).
  * @param excludedSearchPaths Optional subtrees to exclude.
  * @returns Proxy scan result.
  */
 export function scanProjectForProxies(
   projectRoot: string,
   tsconfigFileName = 'tsconfig.json',
-  toolsSearchPath?: string,
+  toolsSearchPath?: string | string[],
   excludedSearchPaths: string[] = [],
 ): IProxyScanResult {
   const diagnostics: string[] = [];

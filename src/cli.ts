@@ -25,9 +25,9 @@ interface CliArgs {
   tsconfigName: string;
 
   /**
-   * Optional subtree path limiting tool scan scope.
+   * Optional subtree path(s) limiting tool scan scope. Repeatable.
    */
-  toolsPath?: string;
+  toolsPaths: string[];
 
   /**
    * Optional subtree paths to exclude from scanning.
@@ -125,7 +125,7 @@ function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
     projectRoot: process.cwd(),
     tsconfigName: 'tsconfig.json',
-    toolsPath: undefined,
+    toolsPaths: [],
     excludePaths: [],
     toolsTag: undefined,
     packageJsonPath: undefined,
@@ -153,9 +153,13 @@ function parseArgs(argv: string[]): CliArgs {
         args.tsconfigName = argv[++i] ?? 'tsconfig.json';
         break;
       case '--tools-path':
-      case '-s':
-        args.toolsPath = argv[++i];
+      case '-s': {
+        const toolsPath = argv[++i];
+        if (toolsPath) {
+          args.toolsPaths.push(toolsPath);
+        }
         break;
+      }
       case '--exclude-path':
       case '-i': {
         const excludePath = argv[++i];
@@ -389,6 +393,7 @@ Options:
   --project, -p <path>    Project root directory (default: current directory)
   --tsconfig, -t <name>   tsconfig file name for the main project (default: tsconfig.json)
   --tools-path, -s <path> Restrict scanning to this path subtree.
+                          Can be repeated to scan multiple subtrees in one run.
                           Relative paths are resolved from --project.
   --exclude-path, -i <path>
                           Exclude this path subtree from scanning.
@@ -446,8 +451,10 @@ How it works:
 
   console.log(`\n🔍 mcp-scanner — scanning ${args.projectRoot}`);
   console.log(`   tsconfig: ${args.tsconfigName}`);
-  if (args.toolsPath) {
-    console.log(`   tools path: ${args.toolsPath}`);
+  if (args.toolsPaths.length > 0) {
+    for (const toolsPath of args.toolsPaths) {
+      console.log(`   tools path: ${toolsPath}`);
+    }
   }
   if (args.excludePaths.length > 0) {
     for (const excluded of args.excludePaths) {
@@ -485,7 +492,7 @@ How it works:
   const result = scanProject(
     args.projectRoot,
     args.tsconfigName,
-    resolveFromProject(args.projectRoot, args.toolsPath),
+    resolveManyFromProject(args.projectRoot, args.toolsPaths),
     resolveManyFromProject(args.projectRoot, args.excludePaths),
     scanOptions,
   );
@@ -493,7 +500,7 @@ How it works:
     const extraResult = scanProject(
       extra.root,
       extra.tsconfig,
-      resolveFromProject(extra.root, args.toolsPath),
+      resolveManyFromProject(extra.root, args.toolsPaths),
       resolveManyFromProject(extra.root, args.excludePaths),
       scanOptions,
     );
@@ -538,14 +545,14 @@ How it works:
     const proxyScan = scanProjectForProxies(
       args.projectRoot,
       args.tsconfigName,
-      resolveFromProject(args.projectRoot, args.toolsPath),
+      resolveManyFromProject(args.projectRoot, args.toolsPaths),
       resolveManyFromProject(args.projectRoot, args.excludePaths),
     );
     for (const extra of args.extraProjects) {
       const extraProxyScan = scanProjectForProxies(
         extra.root,
         extra.tsconfig,
-        resolveFromProject(extra.root, args.toolsPath),
+        resolveManyFromProject(extra.root, args.toolsPaths),
         resolveManyFromProject(extra.root, args.excludePaths),
       );
       proxyScan.methods.push(...extraProxyScan.methods);

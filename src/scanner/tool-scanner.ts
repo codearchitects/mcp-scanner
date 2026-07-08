@@ -98,21 +98,24 @@ export interface IScanResult {
 }
 
 /**
- * Check whether a source file is inside the optional search subtree.
+ * Check whether a source file is inside any of the optional search subtrees.
  *
  * @param filePath Candidate source file path.
- * @param searchPath Optional subtree root used as filter.
+ * @param searchPaths Optional subtree root(s) used as filter.
  * @returns `true` when file is in scope for scanning.
  */
-function isWithinSearchPath(filePath: string, searchPath?: string): boolean {
-  if (!searchPath) {
+function isWithinSearchPath(filePath: string, searchPaths?: string | string[]): boolean {
+  const list = searchPaths == null ? [] : Array.isArray(searchPaths) ? searchPaths : [searchPaths];
+  if (list.length === 0) {
     return true;
   }
 
   const resolvedFile = path.resolve(filePath);
-  const resolvedSearch = path.resolve(searchPath);
-  const relative = path.relative(resolvedSearch, resolvedFile);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  return list.some((searchPath) => {
+    const resolvedSearch = path.resolve(searchPath);
+    const relative = path.relative(resolvedSearch, resolvedFile);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  });
 }
 
 /**
@@ -724,7 +727,7 @@ export interface IScanOptions {
  *
  * @param projectRoot Absolute path to the project root (where tsconfig.json lives).
  * @param tsconfigFileName Optional tsconfig file name. Defaults to `tsconfig.json`.
- * @param toolsSearchPath Optional path to restrict scanning to a specific subtree.
+ * @param toolsSearchPath Optional path(s) to restrict scanning to specific subtree(s).
  * @param excludedSearchPaths Optional paths to exclude from scanning.
  * @param options Optional scan behavior switches.
  * @returns Discovered tools + diagnostics.
@@ -732,7 +735,7 @@ export interface IScanOptions {
 export function scanProject(
   projectRoot: string,
   tsconfigFileName = 'tsconfig.json',
-  toolsSearchPath?: string,
+  toolsSearchPath?: string | string[],
   excludedSearchPaths: string[] = [],
   options: IScanOptions = {},
 ): IScanResult {

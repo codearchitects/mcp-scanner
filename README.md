@@ -237,6 +237,7 @@ mcp-scanner [options]
 --tsconfig, -t <name>   tsconfig file name (default: tsconfig.json)
 --tools-path, -s <path>
                       Restrict scanning to this path subtree.
+                      Can be repeated to scan multiple subtrees in one run.
                       Relative paths are resolved from --project.
 --exclude-path, -i <path>
                       Exclude this path subtree from scanning.
@@ -475,6 +476,15 @@ mcp-scanner -s src/services/modeler-tools.ts -g caip \
 
 A tool that omits both `mcpServers` and `-g` falls into the `default` group (bind it with a bare
 `--mcp-manifest ./tools.mcp.json`). A tool listing multiple `mcpServers` is written into each of their manifests.
+
+> **One MCP server sourced from multiple subtrees.** Each manifest file is fully regenerated on every run,
+> so two *separate* `mcp-scanner` invocations writing to the same manifest would overwrite each other.
+> To feed one MCP server from several source subtrees, pass a repeatable `-s` in a **single** run:
+>
+> ```bash
+> mcp-scanner -s src/schema -s src/services/vscode-tools.ts \
+>   -g caip-tools --default-transport mcp --mcp-manifest caip-tools=./mcp/caip-tools.mcp.json
+> ```
 
 For a whole project that should be MCP-only, use `--default-transport mcp` so every tool defaults to the
 `mcp` transport without annotating each method.

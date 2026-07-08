@@ -228,6 +228,65 @@ class Tools {
     expect(packageJson.contributes.languageModelTools).toEqual([]);
   });
 
+  it('merges multiple -s subtrees into a single MCP manifest in one run', () => {
+    const root = makeTempDir();
+
+    writeFile(path.join(root, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022',
+        module: 'commonjs',
+        strict: true,
+        experimentalDecorators: true,
+        emitDecoratorMetadata: true,
+      },
+      include: ['src/**/*.ts'],
+    }, null, 2));
+
+    writeFile(path.join(root, 'package.json'), JSON.stringify({
+      name: 'multi-path-fixture',
+      version: '1.0.0',
+      contributes: { languageModelTools: [] },
+    }, null, 2));
+
+    writeFile(path.join(root, 'src', 'schema', 'tool.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+export interface IInput { text: string; }
+class SchemaTools {
+  @ExposeTool({ name: 'schemaTool', displayName: 'Schema', modelDescription: 'schema' })
+  run(params: IInput): Promise<IInput> { return Promise.resolve(params); }
+}
+`);
+
+    writeFile(path.join(root, 'src', 'services', 'vscode-tools.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+export interface IInput { text: string; }
+class VscodeTools {
+  @ExposeTool({ name: 'vscodeTool', displayName: 'VSCode', modelDescription: 'vscode' })
+  run(params: IInput): Promise<IInput> { return Promise.resolve(params); }
+}
+`);
+
+    const cliPath = path.join(process.cwd(), 'dist', 'cli.js');
+    const result = spawnSync(process.execPath, [
+      cliPath,
+      '--project', root,
+      '-s', 'src/schema',
+      '-s', 'src/services/vscode-tools.ts',
+      '-g', 'caip-tools',
+      '--default-transport', 'mcp',
+      '--mcp-manifest', 'caip-tools=./mcp/caip-tools.mcp.json',
+    ], { cwd: process.cwd(), encoding: 'utf-8' });
+
+    expect(result.status).toBe(0);
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, 'mcp', 'caip-tools.mcp.json'), 'utf-8')) as {
+      server: string; tools: Array<{ name: string }>;
+    };
+    expect(manifest.server).toBe('caip-tools');
+    // Both subtrees are present in the single manifest — no overwrite.
+    expect(manifest.tools.map((t) => t.name).sort()).toEqual(['schemaTool', 'vscodeTool']);
+  });
+
   it('uses --tools-tag as the MCP server group when tools declare no mcpServers', () => {
     const root = makeTempDir();
 

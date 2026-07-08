@@ -100,6 +100,45 @@ class Excluded {
     expect(result.tools.map((t) => t.name)).toEqual(['includedTool']);
   });
 
+  it('scans multiple search subtrees when given an array of paths', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'a', 'tool.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+interface IInput { value: string; }
+class A {
+  @ExposeTool({ name: 'aTool', displayName: 'A', modelDescription: 'A tool' })
+  run(input: IInput): string { return input.value; }
+}
+`);
+
+    writeFile(path.join(root, 'src', 'b', 'tool.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+interface IInput { value: string; }
+class B {
+  @ExposeTool({ name: 'bTool', displayName: 'B', modelDescription: 'B tool' })
+  run(input: IInput): string { return input.value; }
+}
+`);
+
+    writeFile(path.join(root, 'src', 'c', 'tool.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+interface IInput { value: string; }
+class C {
+  @ExposeTool({ name: 'cTool', displayName: 'C', modelDescription: 'C tool' })
+  run(input: IInput): string { return input.value; }
+}
+`);
+
+    const result = scanProject(root, 'tsconfig.json', [
+      path.join(root, 'src', 'a'),
+      path.join(root, 'src', 'b'),
+    ]);
+
+    expect(result.tools.map((t) => t.name).sort()).toEqual(['aTool', 'bTool']);
+  });
+
   it('excludes tools in configured exclude subtrees', () => {
     const root = makeTempDir();
     writeBaseProject(root);

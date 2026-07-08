@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [1.2.2] - 2026-07-08
+
+### Added
+- `--tools-path` / `-s` is now repeatable: multiple subtrees can be scanned in a single run. This lets several source subtrees feed one MCP manifest without separate invocations overwriting each other. `scanProject`/`scanProjectForProxies` now accept `string | string[]` for the search path.
+
 ## [1.2.1] - 2026-07-07
 
 ### Added
