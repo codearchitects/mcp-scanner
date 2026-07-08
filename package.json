@@ -1,6 +1,6 @@
 {
   "name": "@codearchitects/mcp-scanner",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Scan TypeScript projects for @ExposeTool decorated methods and generate VS Code languageModelTools entries in package.json",
   "repository": {
     "type": "git",
