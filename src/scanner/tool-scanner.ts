@@ -678,12 +678,115 @@ function normalizeTransports(authored: string[] | undefined, fallback: ToolTrans
 /* ------------------------------------------------------------------ */
 
 /**
+ * Strip `undefined` branches from a possibly-union type.
+ *
+ * An optional parameter (`params?: IFoo` or `params: IFoo = {}`) resolves to
+ * `IFoo | undefined` under the checker. For root input schemas the `undefined`
+ * branch is meaningless — it must be dropped so the object branch(es) can be
+ * used directly and the root can stay `{ type: "object" }`.
+ *
+ * @param type Resolved parameter type.
+ * @returns Non-undefined branches of the type.
+ */
+function stripUndefinedBranches(type: ts.Type): ts.Type[] {
+  if (type.flags & ts.TypeFlags.Union) {
+    const unionType = type as ts.UnionType;
+    return unionType.types.filter((t) => !(t.flags & ts.TypeFlags.Undefined));
+  }
+  if (type.flags & ts.TypeFlags.Undefined) {
+    return [];
+  }
+  return [type];
+}
+
+/**
+ * Merge multiple object-typed JSON Schema branches into a single object schema.
+ *
+ * Semantics:
+ * - `properties` is the union across branches (first-seen definition wins).
+ * - `required` is the intersection: a property required in only some branches
+ *   becomes optional in the merge — which is what an optional root parameter
+ *   should mean anyway.
+ *
+ * @param branches Object-typed schema branches.
+ * @returns Merged root object schema.
+ */
+function mergeObjectSchemaBranches(
+  branches: Record<string, unknown>[],
+): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  const requiredSets: Set<string>[] = [];
+
+  for (const branch of branches) {
+    const props = (branch.properties as Record<string, unknown> | undefined) ?? {};
+    for (const [key, value] of Object.entries(props)) {
+      if (!(key in properties)) {
+        properties[key] = value;
+      }
+    }
+    const req = branch.required;
+    requiredSets.push(new Set(Array.isArray(req) ? (req as string[]) : []));
+  }
+
+  const schema: Record<string, unknown> = { type: 'object', properties };
+  if (requiredSets.length > 0) {
+    const [first, ...rest] = requiredSets;
+    const intersection = Array.from(first).filter((k) => rest.every((s) => s.has(k)));
+    if (intersection.length > 0) {
+      schema.required = intersection;
+    }
+  }
+  return schema;
+}
+
+/**
+ * Guarantee a JSON Schema is a valid MCP root inputSchema.
+ *
+ * The MCP spec requires `inputSchema.type === "object"` at the root. Strict
+ * clients (e.g. Claude Code) drop the entire `tools/list` response when even
+ * one tool violates this. This normalizer folds any surviving root-level
+ * `anyOf` of object branches into a merged object schema, and coerces any
+ * other unexpected shape into an empty object schema so the manifest stays
+ * well-formed no matter which conversion path produced the input.
+ *
+ * @param schema Raw schema produced by conversion.
+ * @returns Root schema shaped as `{ type: "object", properties: ... }`.
+ */
+function normalizeRootObjectSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  if (schema && schema.type === 'object') {
+    if ('properties' in schema) {
+      return schema;
+    }
+    return { ...schema, properties: {} };
+  }
+
+  if (schema && Array.isArray((schema as { anyOf?: unknown[] }).anyOf)) {
+    const branches = (schema as { anyOf: unknown[] }).anyOf.filter(
+      (b): b is Record<string, unknown> =>
+        typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'object',
+    );
+    if (branches.length === 1) {
+      return normalizeRootObjectSchema(branches[0]);
+    }
+    if (branches.length > 1) {
+      return mergeObjectSchemaBranches(branches);
+    }
+  }
+
+  return { type: 'object', properties: {} };
+}
+
+/**
  * Given a method declaration, find its first parameter's type node and
  * produce a JSON Schema from it.
  *
+ * The root schema is always normalized to `{ type: "object", properties: ... }`
+ * — an optional parameter (`?:` or initializer) only means every property is
+ * optional; it must not change the root shape.
+ *
  * @param method Method declaration.
  * @param checker Program type checker.
- * @returns JSON Schema for first parameter type.
+ * @returns JSON Schema for first parameter type (root guaranteed `type: "object"`).
  */
 function extractInputSchema(
   method: ts.MethodDeclaration,
@@ -694,17 +797,45 @@ function extractInputSchema(
     return { type: 'object', properties: {} };
   }
 
-  // Try to resolve using the Type API first (handles imported types better)
+  // Try to resolve using the Type API first (handles imported types better).
+  let schema: Record<string, unknown> | undefined;
   try {
     const resolvedType = checker.getTypeAtLocation(firstParam);
     if (resolvedType) {
-      return typeToJsonSchemaFromType(resolvedType, checker, new Set());
+      const branches = stripUndefinedBranches(resolvedType);
+      if (branches.length === 0) {
+        schema = { type: 'object', properties: {} };
+      } else if (branches.length === 1) {
+        schema = typeToJsonSchemaFromType(branches[0], checker, new Set());
+      } else {
+        const branchSchemas = branches.map((t) => typeToJsonSchemaFromType(t, checker, new Set()));
+        const objectBranches = branchSchemas.filter((s) => s && s.type === 'object');
+        schema = objectBranches.length > 0
+          ? mergeObjectSchemaBranches(objectBranches)
+          : { type: 'object', properties: {} };
+      }
     }
   } catch {
-    // Fallback to TypeNode-based resolution
+    // Fallback to TypeNode-based resolution.
   }
 
-  return typeNodeToJsonSchema(firstParam.type, checker);
+  if (!schema) {
+    schema = typeNodeToJsonSchema(firstParam.type, checker);
+  }
+
+  schema = normalizeRootObjectSchema(schema);
+
+  // An optional-marker parameter (`params?: IFoo`) means every property is
+  // optional at the boundary — the whole payload is optional, so no root
+  // property can be required. A default initializer (`params: IFoo = {}`) is
+  // NOT treated the same: the caller still passes an IFoo, so required is
+  // preserved (matches the "unchanged behaviour" acceptance criterion).
+  if (firstParam.questionToken && 'required' in schema) {
+    const { required: _required, ...rest } = schema;
+    schema = rest;
+  }
+
+  return schema;
 }
 
 /* ------------------------------------------------------------------ */

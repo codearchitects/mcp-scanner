@@ -38,6 +38,7 @@ export type { IPatchResult } from './patcher';
 export {
   DEFAULT_MCP_SERVER_GROUP,
   MCP_MANIFEST_FILE,
+  assertValidMcpInputSchemas,
   groupMcpToolsByServer,
   mcpServerGroupsOf,
   readMcpManifestFile,

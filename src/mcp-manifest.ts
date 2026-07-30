@@ -178,6 +178,36 @@ export function groupMcpToolsByServer(
 /*  Serialization                                                      */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/*  Validation                                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Assert every tool's `inputSchema` is a valid MCP root schema.
+ *
+ * MCP requires `inputSchema.type === "object"` at the root. Strict clients
+ * (e.g. Claude Code) reject the ENTIRE `tools/list` response when any single
+ * tool violates this — 0 tools get registered, not just the broken one. This
+ * gate makes that failure mode impossible to ship silently by throwing at
+ * generation time with a clear message naming the offending tool.
+ *
+ * @param tools Scanned tools bound for a manifest.
+ * @throws When any tool's `inputSchema` root is not `{ "type": "object", ... }`.
+ */
+export function assertValidMcpInputSchemas(tools: IScannedTool[]): void {
+  for (const tool of tools) {
+    const schema = tool.inputSchema as Record<string, unknown> | undefined;
+    const rootType = schema && typeof schema === 'object' ? (schema as Record<string, unknown>).type : undefined;
+    if (rootType !== 'object') {
+      const rendered = JSON.stringify(schema);
+      throw new Error(
+        `Invalid MCP inputSchema for tool '${tool.name}': root must be { "type": "object", ... }, got ${rendered}. ` +
+          `This would cause strict MCP clients (e.g. Claude Code) to reject the entire tools/list response.`,
+      );
+    }
+  }
+}
+
 /**
  * Project a scanned tool into a manifest tool entry.
  *
@@ -207,6 +237,7 @@ export function serializeMcpManifest(
   tools: IScannedTool[],
   serverName: string = DEFAULT_MCP_SERVER_GROUP,
 ): string {
+  assertValidMcpInputSchemas(tools);
   const manifest: IMcpManifest = {
     version: 1,
     server: serverName,

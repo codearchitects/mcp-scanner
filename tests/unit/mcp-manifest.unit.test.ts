@@ -3,6 +3,7 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_MCP_SERVER_GROUP,
+  assertValidMcpInputSchemas,
   groupMcpToolsByServer,
   mcpServerGroupsOf,
   readMcpManifestFile,
@@ -115,5 +116,27 @@ describe('mcp-manifest', () => {
     const bad = path.join(root, 'bad.json');
     fs.writeFileSync(bad, '{ not json', 'utf-8');
     expect(readMcpManifestFile(bad)).toBeUndefined();
+  });
+
+  it('validation gate rejects a tool whose root inputSchema is not type:"object"', () => {
+    const bad: IScannedTool = {
+      ...tool('brokenTool', ['mcp']),
+      // A hand-crafted illegal schema — the exact shape that used to slip
+      // through for `params?: IFoo` and made Claude Code drop all tools.
+      inputSchema: {
+        anyOf: [
+          { type: 'object' },
+          { type: 'object', properties: { filter: { type: 'string' } } },
+        ],
+      },
+    };
+
+    expect(() => assertValidMcpInputSchemas([bad])).toThrow(/brokenTool/);
+    expect(() => serializeMcpManifest([bad], 'A')).toThrow(/brokenTool/);
+  });
+
+  it('validation gate accepts a well-formed root object schema', () => {
+    const good = tool('okTool', ['mcp']);
+    expect(() => assertValidMcpInputSchemas([good])).not.toThrow();
   });
 });

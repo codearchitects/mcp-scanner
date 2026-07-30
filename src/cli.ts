@@ -6,7 +6,7 @@
 import * as path from 'path';
 import { copyDefaultScaffoldTemplateToLocal, generateProxyFile } from './proxy-generator';
 import { AUTOGEN_STATE_FILE, patchPackageJsonFile } from './patcher';
-import { DEFAULT_MCP_SERVER_GROUP, groupMcpToolsByServer, writeMcpManifestFile } from './mcp-manifest';
+import { DEFAULT_MCP_SERVER_GROUP, assertValidMcpInputSchemas, groupMcpToolsByServer, writeMcpManifestFile } from './mcp-manifest';
 import { scanProjectForProxies } from './proxy-scanner';
 import { IScannedTool, ToolTransport, scanProject } from './scanner';
 
@@ -529,6 +529,16 @@ How it works:
       console.log(`   ${tool.name.padEnd(28)} ${tool.displayName}`);
     }
     console.log();
+  }
+
+  // Fail the scan loudly if any tool has an illegal root inputSchema. Strict MCP
+  // clients (e.g. Claude Code) drop the entire tools/list response otherwise.
+  try {
+    assertValidMcpInputSchemas(result.tools);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`❌ ${message}`);
+    process.exit(1);
   }
 
   if (args.dryRun) {

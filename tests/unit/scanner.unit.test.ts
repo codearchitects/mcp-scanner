@@ -685,6 +685,155 @@ class UpdateNodeService {
     expect(newValueSchema.anyOf?.some((s) => s.type === 'boolean')).toBe(true);
   });
 
+  it('optional object parameter (`params?: IFoo`) still emits root type:"object" with all props optional', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'optional.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+
+interface INodeContextListParams {
+  filter: string;
+  limit?: number;
+}
+
+class Svc {
+  @ExposeTool({
+    name: 'listOptional',
+    displayName: 'List Optional',
+    modelDescription: 'List with optional params',
+  })
+  list(params?: INodeContextListParams): string { return String(params); }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.tools).toHaveLength(1);
+
+    const schema = result.tools[0].inputSchema as {
+      type?: string;
+      anyOf?: unknown;
+      properties?: Record<string, { type?: string }>;
+      required?: string[];
+    };
+
+    // Root MUST be a plain object schema — never a root-level anyOf.
+    expect(schema.type).toBe('object');
+    expect(schema.anyOf).toBeUndefined();
+    expect(schema.properties).toBeDefined();
+    expect(schema.properties!.filter.type).toBe('string');
+    expect(schema.properties!.limit.type).toBe('number');
+    // Because the whole parameter is optional, every property becomes optional at the root.
+    expect(schema.required).toBeUndefined();
+  });
+
+  it('required object parameter (`params: IFoo`) preserves required list at the root', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'required.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+
+interface IFoo {
+  id: string;
+  count?: number;
+}
+
+class Svc {
+  @ExposeTool({
+    name: 'runRequired',
+    displayName: 'Run Required',
+    modelDescription: 'Required params',
+  })
+  run(params: IFoo): string { return params.id; }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.diagnostics).toEqual([]);
+    const schema = result.tools[0].inputSchema as {
+      type?: string;
+      properties?: Record<string, { type?: string }>;
+      required?: string[];
+    };
+    expect(schema.type).toBe('object');
+    expect(schema.properties!.id.type).toBe('string');
+    expect(schema.properties!.count.type).toBe('number');
+    expect(schema.required).toEqual(['id']);
+  });
+
+  it('parameter with default initializer (`params: IFoo = {}`) is equivalent to required at the root', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'default-init.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+
+interface IFoo {
+  id: string;
+  count?: number;
+}
+
+class Svc {
+  @ExposeTool({
+    name: 'runDefaultInit',
+    displayName: 'Run Default Init',
+    modelDescription: 'Default init params',
+  })
+  run(params: IFoo = {} as IFoo): string { return params.id; }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.diagnostics).toEqual([]);
+    const schema = result.tools[0].inputSchema as {
+      type?: string;
+      anyOf?: unknown;
+      properties?: Record<string, { type?: string }>;
+      required?: string[];
+    };
+    expect(schema.type).toBe('object');
+    expect(schema.anyOf).toBeUndefined();
+    expect(schema.properties!.id.type).toBe('string');
+    expect(schema.properties!.count.type).toBe('number');
+    expect(schema.required).toEqual(['id']);
+  });
+
+  it('nested union INSIDE an object still emits its anyOf — only the ROOT is constrained', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+
+    writeFile(path.join(root, 'src', 'nested-union.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+
+interface IFoo {
+  filter: string;
+  choice: 1 | 'x';
+}
+
+class Svc {
+  @ExposeTool({
+    name: 'runNested',
+    displayName: 'Run Nested',
+    modelDescription: 'Nested union',
+  })
+  run(params?: IFoo): string { return String(params); }
+}
+`);
+
+    const result = scanProject(root);
+    expect(result.diagnostics).toEqual([]);
+    const schema = result.tools[0].inputSchema as {
+      type?: string;
+      properties?: Record<string, { anyOf?: unknown[]; type?: string }>;
+    };
+    expect(schema.type).toBe('object');
+    // Nested unions remain legal — only the root shape is normalized.
+    expect(Array.isArray(schema.properties!.choice.anyOf)).toBe(true);
+    expect(schema.properties!.filter.type).toBe('string');
+  });
+
   it('defaults transports to ["lm"] when the decorator omits it', () => {
     const root = makeTempDir();
     writeBaseProject(root);

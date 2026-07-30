@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [1.2.3] - 2026-07-30
+
+### Fixed
+- Fixed illegal root-level `anyOf` `inputSchema` emitted for tools whose first parameter was an optional object (`params?: IFoo` or `params: IFoo = {}`). The TypeScript checker resolved such parameters to `IFoo | undefined`, and the union branch of the JSON Schema converter produced `{ "anyOf": [ … ] }` at the ROOT — violating the MCP spec (`inputSchema.type === "object"`) and causing strict clients (e.g. Claude Code) to reject the ENTIRE `tools/list` response, hiding every tool of the affected server.
+- `extractInputSchema` now strips the `undefined` branch before conversion, uses the single remaining object branch directly, or merges multiple object branches (union of `properties`, intersection of `required`). The root is always normalized to `{ "type": "object", "properties": … }`. Nested unions inside properties are unaffected — only the ROOT is constrained.
+
+### Added
+- Added `assertValidMcpInputSchemas(tools)` post-generation validation gate exported from `@codearchitects/mcp-scanner`. `serializeMcpManifest` and the CLI now invoke it: on violation the scan fails with a clear error naming the offending tool and its schema, making the whole bug class impossible to ship silently no matter which conversion path produced it.
+
 ## [1.2.2] - 2026-07-08
 
 ### Added
