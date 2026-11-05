@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+- MCP `outputSchema` for tools published over MCP. The scanner derives it from the method's return type: a `Promise` is unwrapped and the type of its `structuredContent` property is converted to JSON Schema, exactly as `inputSchema` is derived from the parameters. It is written into the MCP manifest entry (`IMcpManifestTool.outputSchema`, `IScannedTool.outputSchema`) and never into `package.json`.
+- `outputSchema` option on `@ExposeTool` and `@Tool`, written as a JSON literal, to state the schema explicitly; it overrides the derived one. Generated proxies carry it in their `@Tool` (the default scaffold renders it).
+- `assertValidMcpOutputSchemas(tools)`, exported and run by `serializeMcpManifest` and the CLI: an `outputSchema` root must be `{ "type": "object" }`. MCP 2025-11-25 and earlier require it; MCP 2026-07-28 allows any JSON value, but an object root is valid in every version, so it is the only root the scanner writes.
+- When no truthful schema can be stated — no `structuredContent`, or a type that is `unknown`, `any`, `never`, an empty object, an index signature only, or not an object (a list, a primitive: wrap it in an object) — no `outputSchema` is written and a scan diagnostic names the tool and the reason.
+
+### Fixed
+- A type repeated inside one schema (`traces?: string[]` after `steps: string[]`) was mistaken for a circular reference and emitted as `{ "type": "object" }`. The circular-reference guard is now scoped to the current recursion path. Consumers that patched the installed scanner for this (`visited = new Set(visited).add(typeName)`) find the same text and need no patch.
+
 ## [1.2.3] - 2026-07-30
 
 ### Fixed

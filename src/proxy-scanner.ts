@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as ts from 'typescript';
 import type { IExposeToolOptions } from './decorators';
+import { literalToJson } from './scanner/json-literal';
 
 /**
  * Proxy method parameter metadata.
@@ -198,6 +199,34 @@ function getStringProperty(obj: ts.ObjectLiteralExpression, name: string): strin
     }
   }
 
+  return undefined;
+}
+
+/**
+ * Read the explicit `outputSchema` option of a decorator, so a generated proxy carries it.
+ *
+ * @param obj Decorator options object literal.
+ * @param toolName Tool name, for the diagnostic.
+ * @param diagnostics Accumulator for scan diagnostics.
+ * @returns The schema when the option is a JSON literal with an object root; otherwise `undefined`
+ *   (and a diagnostic when the option is present but unusable).
+ */
+function readOutputSchemaOption(
+  obj: ts.ObjectLiteralExpression,
+  toolName: string,
+  diagnostics: string[],
+): Record<string, unknown> | undefined {
+  const prop = obj.properties.find((p): p is ts.PropertyAssignment =>
+    ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'outputSchema');
+  if (!prop) {
+    return undefined;
+  }
+  const read = literalToJson(prop.initializer);
+  const value = read?.value;
+  if (typeof value === 'object' && value !== null && !Array.isArray(value) && (value as Record<string, unknown>).type === 'object') {
+    return value as Record<string, unknown>;
+  }
+  diagnostics.push(`${toolName}: outputSchema not copied to the proxy — it must be a JSON literal whose root is { "type": "object" }.`);
   return undefined;
 }
 
@@ -625,6 +654,7 @@ export function scanProjectForProxies(
             const modelDescription = getStringProperty(argsObj, 'modelDescription');
             const icon = getStringProperty(argsObj, 'icon');
             const canBeReferencedInPrompt = getBooleanProperty(argsObj, 'canBeReferencedInPrompt');
+            const outputSchema = readOutputSchemaOption(argsObj, toolName, diagnostics);
 
             const methodName = member.name?.getText(sourceFile) ?? 'unnamedMethod';
             const returnTypeText = member.type ? member.type.getText(sourceFile) : 'Promise<unknown>';
@@ -636,6 +666,7 @@ export function scanProjectForProxies(
               ...(modelDescription && { modelDescription }),
               ...(icon && { icon }),
               ...(canBeReferencedInPrompt !== undefined && { canBeReferencedInPrompt }),
+              ...(outputSchema && { outputSchema }),
             };
 
             methods.push({

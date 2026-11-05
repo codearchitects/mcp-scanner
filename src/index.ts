@@ -39,6 +39,7 @@ export {
   DEFAULT_MCP_SERVER_GROUP,
   MCP_MANIFEST_FILE,
   assertValidMcpInputSchemas,
+  assertValidMcpOutputSchemas,
   groupMcpToolsByServer,
   mcpServerGroupsOf,
   readMcpManifestFile,

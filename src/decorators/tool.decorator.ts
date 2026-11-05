@@ -49,6 +49,13 @@ export interface IToolOptions {
    * manifest file. When omitted, the tool falls into the default MCP server group.
    */
   mcpServers?: string[];
+  /**
+   * Explicit JSON Schema of the tool's structured result (MCP `outputSchema`), written as a JSON
+   * literal. It overrides the schema the scanner derives from the type of the `structuredContent`
+   * property of the method's return type. Its root must be `{ type: 'object' }`, which every MCP
+   * version accepts.
+   */
+  outputSchema?: Record<string, unknown>;
 }
 
 /**

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_MCP_SERVER_GROUP,
   assertValidMcpInputSchemas,
+  assertValidMcpOutputSchemas,
   groupMcpToolsByServer,
   mcpServerGroupsOf,
   readMcpManifestFile,
@@ -138,5 +139,28 @@ describe('mcp-manifest', () => {
   it('validation gate accepts a well-formed root object schema', () => {
     const good = tool('okTool', ['mcp']);
     expect(() => assertValidMcpInputSchemas([good])).not.toThrow();
+  });
+
+  it('writes the outputSchema of a tool that has one, and no outputSchema key for a tool that has none', () => {
+    const outputSchema = { type: 'object', properties: { count: { type: 'number' } }, required: ['count'] };
+    const content = serializeMcpManifest([{ ...tool('typed', ['mcp']), outputSchema }, tool('untyped', ['mcp'])], 'A');
+    const parsed = JSON.parse(content) as { tools: Array<Record<string, unknown>> };
+
+    expect(parsed.tools[0].outputSchema).toEqual(outputSchema);
+    expect(parsed.tools[1]).not.toHaveProperty('outputSchema');
+  });
+
+  it('output validation gate rejects an outputSchema whose root is not type:"object"', () => {
+    const bad: IScannedTool = { ...tool('listTool', ['mcp']), outputSchema: { type: 'array', items: { type: 'string' } } };
+
+    expect(() => assertValidMcpOutputSchemas([bad])).toThrow(/listTool/);
+    expect(() => serializeMcpManifest([bad], 'A')).toThrow(/listTool/);
+    expect(() => assertValidMcpOutputSchemas([tool('noSchema', ['mcp'])])).not.toThrow();
+  });
+
+  it('says an object root is valid in every MCP version when it rejects a root', () => {
+    const bad: IScannedTool = { ...tool('listTool', ['mcp']), outputSchema: { type: 'array', items: { type: 'string' } } };
+
+    expect(() => assertValidMcpOutputSchemas([bad])).toThrow(/every MCP version.*2025-11-25/);
   });
 });

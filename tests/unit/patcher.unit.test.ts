@@ -125,6 +125,18 @@ describe('patcher', () => {
     expect(result.nextGeneratedToolNames).toEqual(['lmTool', 'both']);
   });
 
+  it('keeps outputSchema out of package.json: VS Code language model tools have no such field', () => {
+    const raw = JSON.stringify({ name: 'sample', contributes: { languageModelTools: [] } });
+    const typed: IScannedTool = { ...tool('typed', undefined, ['lm', 'mcp']), outputSchema: { type: 'object', properties: {} } };
+
+    const parsed = JSON.parse(patchPackageJsonContent(raw, [typed]).content) as {
+      contributes: { languageModelTools: Array<Record<string, unknown>> };
+    };
+
+    expect(parsed.contributes.languageModelTools[0].name).toBe('typed');
+    expect(parsed.contributes.languageModelTools[0]).not.toHaveProperty('outputSchema');
+  });
+
   it('ignores malformed state file and still patches package json', () => {
     const root = makeTempDir();
     const packageJsonPath = path.join(root, 'package.json');

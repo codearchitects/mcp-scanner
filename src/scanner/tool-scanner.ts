@@ -8,6 +8,7 @@
 
 import * as path from 'path';
 import * as ts from 'typescript';
+import { literalToJson } from './json-literal';
 
 /* ------------------------------------------------------------------ */
 /*  Public types                                                       */
@@ -60,6 +61,14 @@ export interface IScannedTool {
    * JSON Schema describing tool input.
    */
   inputSchema: Record<string, unknown>;
+
+  /**
+   * JSON Schema of the tool's structured result (MCP `outputSchema`), when it can be stated
+   * truthfully: the explicit `outputSchema` option, or the type of the `structuredContent` property
+   * of what the method returns. Its root is always an object. Absent when that type is missing, vague
+   * or not an object — a diagnostic then names the tool (see {@link extractOutputSchema}).
+   */
+  outputSchema?: Record<string, unknown>;
 
   /**
    * Optional tool tags used for grouping/filtering.
@@ -288,7 +297,7 @@ function typeToJsonSchemaFromType(
 
   // --- Object type (interface, class, type literal, or array) ---
   if (type.flags & ts.TypeFlags.Object) {
-    visited.add(typeName);
+    visited = new Set(visited).add(typeName);
 
     // Check if this is an array type by examining the symbol name
     const typeAsObj = type as ts.ObjectType;
@@ -345,7 +354,7 @@ function typeNodeToJsonSchema(
     if (visited.has(typeName)) {
       return { type: 'object' };
     }
-    visited.add(typeName);
+    visited = new Set(visited).add(typeName);
 
     // First, try the original method: getSymbolAtLocation
     const symbol = checker.getSymbolAtLocation(typeNode.typeName);
@@ -839,6 +848,166 @@ function extractInputSchema(
 }
 
 /* ------------------------------------------------------------------ */
+/*  Output schema                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Find a property of a decorator's options object.
+ *
+ * @param obj Decorator options object literal.
+ * @param name Property name.
+ * @returns The property's initializer, or `undefined` when absent.
+ */
+function getPropertyInitializer(obj: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
+  for (const prop of obj.properties) {
+    if (ts.isPropertyAssignment(prop) && prop.name && ts.isIdentifier(prop.name) && prop.name.text === name) {
+      return prop.initializer;
+    }
+  }
+  return undefined;
+}
+
+/** What {@link extractOutputSchema} concluded: a schema, or why none can be written. */
+type IOutputSchemaVerdict = { schema: Record<string, unknown> } | { reason: string };
+
+/** True for a JSON Schema whose root is an object. */
+function isObjectRootSchema(schema: unknown): boolean {
+  return typeof schema === 'object' && schema !== null && !Array.isArray(schema)
+    && (schema as Record<string, unknown>).type === 'object';
+}
+
+/**
+ * Why a non-object root is refused. MCP 2025-11-25 and earlier type `structuredContent` and the
+ * `outputSchema` root as a JSON object; MCP 2026-07-28 allows any JSON value, but an object root is
+ * valid in every version, so it is the only root this scanner writes.
+ */
+const OBJECT_ROOT_REASON =
+  'an outputSchema root must be a JSON object, which every MCP version accepts (2025-11-25 and earlier '
+  + 'require it): wrap the data in an object';
+
+/**
+ * The outputSchema of a tool: its explicit `outputSchema` option when given, otherwise the JSON
+ * Schema of the type of the `structuredContent` property of what the method returns (a Promise is
+ * unwrapped), built exactly as an inputSchema is.
+ *
+ * A server that publishes an outputSchema MUST return results that conform to it, so no schema is
+ * written — and the verdict says why — when the return type has no `structuredContent`, or its type
+ * is `unknown`, `any`, `never`, an empty object or an index signature only (`Record<string,
+ * unknown>`): such a schema would state nothing. A type that is not an object — a list, a
+ * primitive — gets no schema either: the root is always an object (see {@link OBJECT_ROOT_REASON}).
+ *
+ * @param method Method declaration.
+ * @param checker Program type checker.
+ * @param explicit The `outputSchema` option's initializer, when the decorator has one.
+ * @returns The schema, or the reason none is written.
+ */
+function extractOutputSchema(
+  method: ts.MethodDeclaration,
+  checker: ts.TypeChecker,
+  explicit: ts.Expression | undefined,
+): IOutputSchemaVerdict {
+  if (explicit) {
+    return explicitOutputSchema(explicit);
+  }
+  const data = structuredContentType(method, checker);
+  return 'reason' in data ? data : dataOutputSchema(data.type, checker);
+}
+
+/**
+ * The verdict on an explicit `outputSchema` option.
+ *
+ * @param explicit The option's initializer.
+ * @returns The schema, or why it is refused.
+ */
+function explicitOutputSchema(explicit: ts.Expression): IOutputSchemaVerdict {
+  const read = literalToJson(explicit);
+  if (!read) {
+    return { reason: 'the explicit outputSchema option must be a JSON Schema object written as a literal in the decorator' };
+  }
+  return isObjectRootSchema(read.value)
+    ? { schema: read.value as Record<string, unknown> }
+    : { reason: `the explicit outputSchema option was refused: its root is not { "type": "object" }; ${OBJECT_ROOT_REASON}` };
+}
+
+/**
+ * The type of the `structuredContent` property of what a method returns (a Promise unwrapped,
+ * `undefined` removed), or why there is none worth a schema (`any`, `unknown`, `never`).
+ *
+ * @param method Method declaration.
+ * @param checker Program type checker.
+ * @returns The data type, or the reason no schema can be written.
+ */
+function structuredContentType(method: ts.MethodDeclaration, checker: ts.TypeChecker): { type: ts.Type } | { reason: string } {
+  const signature = checker.getSignatureFromDeclaration(method);
+  if (!signature) {
+    return { reason: 'its return type could not be resolved' };
+  }
+  const returned = checker.getReturnTypeOfSignature(signature);
+  const awaited = checker.getAwaitedType(returned) ?? returned;
+  const property = awaited.getProperty('structuredContent');
+  if (!property) {
+    return { reason: `its return type ${checker.typeToString(returned)} has no structuredContent` };
+  }
+  // Checked on the raw type: NonNullable<unknown> is {}, which would hide an unknown.
+  const declared = checker.getTypeOfSymbolAtLocation(property, method);
+  if (declared.flags & ts.TypeFlags.Any) {
+    return { reason: 'the type of its structuredContent is any; give the result type a concrete object type' };
+  }
+  if (declared.flags & ts.TypeFlags.Unknown) {
+    return { reason: 'the type of its structuredContent is unknown; give the result type a concrete object type' };
+  }
+  const type = checker.getNonNullableType(declared);
+  if (type.flags & ts.TypeFlags.Never) {
+    return { reason: 'the type of its structuredContent is never' };
+  }
+  return { type };
+}
+
+/**
+ * The verdict on a data type: its JSON Schema, unless it states no field (an empty object, an
+ * index signature only) or it is not an object.
+ *
+ * @param data The type of `structuredContent`.
+ * @param checker Program type checker.
+ * @returns The schema, or the reason none is written.
+ */
+function dataOutputSchema(data: ts.Type, checker: ts.TypeChecker): IOutputSchemaVerdict {
+  const dataName = checker.typeToString(data);
+  const isList = checker.isArrayType(data) || checker.isTupleType(data);
+  if (!isList && data.flags & ts.TypeFlags.Object && data.getProperties().length === 0) {
+    const kind = checker.getIndexInfosOfType(data).length > 0 ? 'an index signature only' : 'an empty object type';
+    return { reason: `the type of its structuredContent (${dataName}) is ${kind}, which states no field` };
+  }
+
+  const schema: Record<string, unknown> = typeToJsonSchemaFromType(data, checker, new Set());
+  if (isObjectRootSchema(schema)) {
+    return { schema };
+  }
+  const branches = Array.isArray(schema.anyOf) ? schema.anyOf : [];
+  if (branches.length > 0 && branches.every(isObjectRootSchema)) {
+    return { schema: mergeObjectSchemaBranches(branches as Record<string, unknown>[]) };
+  }
+  const what = isList ? 'not an object but a list' : 'not an object';
+  return { reason: `the type of its structuredContent (${dataName}) is ${what}; ${OBJECT_ROOT_REASON}` };
+}
+
+/**
+ * Apply an outputSchema verdict to a scanned tool: set the schema, or — for a tool published over
+ * MCP — report why none was written.
+ *
+ * @param tool Scanned tool being built.
+ * @param verdict What {@link extractOutputSchema} concluded.
+ * @param diagnostics Accumulator for scan diagnostics.
+ */
+function applyOutputSchema(tool: IScannedTool, verdict: IOutputSchemaVerdict, diagnostics: string[]): void {
+  if ('schema' in verdict) {
+    tool.outputSchema = verdict.schema;
+  } else if (tool.transports.includes('mcp')) {
+    diagnostics.push(`${tool.name}: no outputSchema written — ${verdict.reason}.`);
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Main scanner                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -966,7 +1135,7 @@ function visitNode(
           const mcpServers = getStringArrayProperty(exposeArgsObj, 'mcpServers');
           const inputSchema = extractInputSchema(member, checker);
 
-          tools.push({
+          const scanned: IScannedTool = {
             name,
             displayName,
             modelDescription,
@@ -976,7 +1145,13 @@ function visitNode(
             inputSchema,
             transports,
             ...(mcpServers && mcpServers.length > 0 ? { mcpServers } : {}),
-          });
+          };
+          applyOutputSchema(
+            scanned,
+            extractOutputSchema(member, checker, getPropertyInitializer(exposeArgsObj, 'outputSchema')),
+            diagnostics,
+          );
+          tools.push(scanned);
           continue;
         }
 
@@ -998,7 +1173,7 @@ function visitNode(
           const mcpServers = getStringArrayProperty(toolArgsObj, 'mcpServers');
           const inputSchema = extractInputSchema(member, checker);
 
-          tools.push({
+          const scanned: IScannedTool = {
             name,
             displayName,
             modelDescription,
@@ -1008,7 +1183,13 @@ function visitNode(
             inputSchema,
             transports,
             ...(mcpServers && mcpServers.length > 0 ? { mcpServers } : {}),
-          });
+          };
+          applyOutputSchema(
+            scanned,
+            extractOutputSchema(member, checker, getPropertyInitializer(toolArgsObj, 'outputSchema')),
+            diagnostics,
+          );
+          tools.push(scanned);
         }
       }
     }

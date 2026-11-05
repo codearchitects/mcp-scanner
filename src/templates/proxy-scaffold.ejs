@@ -26,6 +26,9 @@ export class <%- className %> {
 <% if (method.toolOptions.canBeReferencedInPrompt !== undefined) { -%>
     canBeReferencedInPrompt: <%- method.toolOptions.canBeReferencedInPrompt ? 'true' : 'false' %>,
 <% } -%>
+<% if (method.toolOptions.outputSchema) { -%>
+    outputSchema: <%- JSON.stringify(method.toolOptions.outputSchema) %>,
+<% } -%>
   })
 <% } -%>
   public async <%- method.methodName %>(<%- method.parameters.map(p => p.name + (p.optional ? '?' : '') + ': ' + p.typeText).join(', ') %>): <%- method.returnTypeText %> {

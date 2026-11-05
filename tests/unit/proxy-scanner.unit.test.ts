@@ -173,4 +173,38 @@ class Broken {
     expect(result.diagnostics.length).toBeGreaterThan(0);
     expect(result.diagnostics[0]).toContain("missing required property 'name'");
   });
+
+  it('carries an explicit outputSchema option into the proxy tool options', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+    writeFile(path.join(root, 'src', 'service.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+class ProxySource {
+  @ExposeTool({ name: 'typedTool', displayName: 'Typed', modelDescription: 'Typed', outputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } })
+  run(): Promise<unknown> { return Promise.resolve({}); }
+}
+`);
+
+    const result = scanProjectForProxies(root);
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.methods[0].toolOptions?.outputSchema).toEqual({ type: 'object', properties: { id: { type: 'string' } }, required: ['id'] });
+  });
+
+  it('does not copy an explicit outputSchema whose root is not an object, and says so', () => {
+    const root = makeTempDir();
+    writeBaseProject(root);
+    writeFile(path.join(root, 'src', 'service.ts'), `
+function ExposeTool(_: unknown): MethodDecorator { return () => undefined; }
+class ProxySource {
+  @ExposeTool({ name: 'listTool', displayName: 'List', modelDescription: 'List', outputSchema: { type: 'array', items: { type: 'string' } } })
+  run(): Promise<unknown> { return Promise.resolve([]); }
+}
+`);
+
+    const result = scanProjectForProxies(root);
+
+    expect(result.methods[0].toolOptions?.outputSchema).toBeUndefined();
+    expect(result.diagnostics.join('\n')).toMatch(/listTool.*outputSchema not copied/);
+  });
 });
