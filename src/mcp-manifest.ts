@@ -284,7 +284,9 @@ export function serializeMcpManifest(
     server: serverName,
     tools: tools.map(toManifestTool),
   };
-  return `${JSON.stringify(manifest, null, 2)}\n`;
+  // Every text with Unix line endings, wherever it came from: the manifest must be the same
+  // whatever system scans the sources.
+  return `${JSON.stringify(manifest, (_key, value: unknown) => (typeof value === 'string' ? value.replace(/\r\n?/g, '\n') : value), 2)}\n`;
 }
 
 /* ------------------------------------------------------------------ */

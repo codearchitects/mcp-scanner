@@ -388,6 +388,84 @@ function withDefinitions(checker: ts.TypeChecker, build: () => Record<string, un
   }
 }
 
+/**
+ * Whether a property can never hold a JSON value: its type is `never`, or `undefined` alone
+ * (`x?: never` resolves to `undefined` under strict null checks). Undefined is never serialized,
+ * so the property can only be absent.
+ *
+ * @param prop Property symbol.
+ * @param propType Its type.
+ * @returns `true` when the property must never be given.
+ */
+function neverCarriesAValue(prop: ts.Symbol, propType: ts.Type): boolean {
+  const declared = prop.valueDeclaration ?? prop.declarations?.[0];
+  if (declared && (ts.isPropertySignature(declared) || ts.isPropertyDeclaration(declared)) && declared.type?.kind === ts.SyntaxKind.NeverKeyword) {
+    return true;
+  }
+  if (propType.flags & (ts.TypeFlags.Never | ts.TypeFlags.Undefined)) {
+    return true;
+  }
+  return !!(propType.flags & ts.TypeFlags.Union)
+    && (propType as ts.UnionType).types.every((t) => t.flags & (ts.TypeFlags.Never | ts.TypeFlags.Undefined));
+}
+
+/**
+ * Whether a property is only read: declared `readonly`, or documented with `@readonly`.
+ *
+ * @param prop Property symbol.
+ * @returns `true` when the schema marks it `readOnly`.
+ */
+function isReadOnlyMember(prop: ts.Symbol): boolean {
+  return (prop.declarations ?? []).some((decl) =>
+    !!(ts.getCombinedModifierFlags(decl as ts.Declaration) & ts.ModifierFlags.Readonly)
+    || ts.getJSDocTags(decl).some((tag) => tag.tagName.text === 'readonly'));
+}
+
+/**
+ * The schema of a tuple: one schema per fixed position (`prefixItems`), the number of required
+ * positions (`minItems`), and either the rest element as `items` or, without one, the number of all
+ * positions (`maxItems`) and `items: false`.
+ *
+ * @param type The tuple type.
+ * @param checker Program type checker.
+ * @param visited Circular-reference guard set.
+ * @returns JSON Schema fragment, or `undefined` when the type is not a tuple.
+ */
+function tupleToSchema(type: ts.Type, checker: ts.TypeChecker, visited: Set<string>): Record<string, unknown> | undefined {
+  const reference = type as ts.TypeReference;
+  const target = (type.flags & ts.TypeFlags.Object) && ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference)
+    ? reference.target as ts.TupleType
+    : undefined;
+  if (!target || !((target as ts.ObjectType).objectFlags & ts.ObjectFlags.Tuple)) {
+    return undefined;
+  }
+  const elements = checker.getTypeArguments(reference);
+  const flags = target.elementFlags;
+  const schemaOf = (element: ts.Type): Record<string, unknown> => {
+    const members = element.flags & ts.TypeFlags.Union
+      ? (element as ts.UnionType).types.filter((t) => !(t.flags & ts.TypeFlags.Undefined))
+      : [element];
+    return unionMembersToSchema(members, checker, visited);
+  };
+  const prefixItems: Record<string, unknown>[] = [];
+  let rest: Record<string, unknown> | undefined;
+  elements.forEach((element, index) => {
+    if (flags[index] & ts.ElementFlags.Variable) {
+      rest = schemaOf(element);
+    } else {
+      prefixItems.push(schemaOf(element));
+    }
+  });
+  const schema: Record<string, unknown> = { type: 'array', prefixItems, minItems: target.minLength };
+  if (rest) {
+    schema['items'] = rest;
+  } else {
+    schema['maxItems'] = prefixItems.length;
+    schema['items'] = false;
+  }
+  return schema;
+}
+
 function typeToJsonSchemaObject(
   type: ts.Type,
   checker: ts.TypeChecker,
@@ -404,6 +482,13 @@ function typeToJsonSchemaObject(
     // synthetic: it has no declaration of its own to read the type at.
     const propType = propertyType(prop, type, checker);
     if (!isDataMember(prop, propType, checker)) {
+      continue;
+    }
+
+    // A property that can never hold a JSON value (`x?: never`, `x?: undefined`) must never be
+    // given: the schema `false` refuses it whatever `additionalProperties` allows. It is never required.
+    if (neverCarriesAValue(prop, propType)) {
+      properties[propName] = false;
       continue;
     }
 
@@ -440,7 +525,10 @@ function typeToJsonSchemaObject(
     // Extract JSDoc description
     const jsDocComment = prop.getDocumentationComment(checker);
     if (jsDocComment && jsDocComment.length > 0) {
-      propSchema['description'] = jsDocComment.map((d) => d.text).join('');
+      propSchema['description'] = unixNewlines(jsDocComment.map((d) => d.text).join(''));
+    }
+    if (isReadOnlyMember(prop)) {
+      propSchema['readOnly'] = true;
     }
 
     properties[propName] = propSchema;
@@ -545,6 +633,12 @@ function typeToJsonSchemaFromType(
   // --- Intersection of object types (`A & B`, `Omit<T, K> & { … }`): one object with every member's properties ---
   if (type.flags & ts.TypeFlags.Intersection && (type as ts.IntersectionType).types.every((t) => t.flags & ts.TypeFlags.Object)) {
     return typeToJsonSchemaObject(type, checker, new Set(visited).add(typeName));
+  }
+
+  // --- Tuple: a list of fixed shape, read-only or not ---
+  const tuple = tupleToSchema(type, checker, visited);
+  if (tuple) {
+    return tuple;
   }
 
   // --- Object type (interface, class, type literal, or array) ---
@@ -804,9 +898,20 @@ function getJsDocDescription(node: ts.Node): string | undefined {
   }
   const comment = jsDocs[0].comment;
   if (typeof comment === 'string') {
-    return comment;
+    return unixNewlines(comment);
   }
   return undefined;
+}
+
+/**
+ * A text with Unix line endings: the JSDoc of a source checked out on Windows keeps its `\r\n`, and
+ * a manifest must not change with the system that scans it.
+ *
+ * @param text The text.
+ * @returns The text, every `\r\n` and lone `\r` written as `\n`.
+ */
+export function unixNewlines(text: string): string {
+  return text.replace(/\r\n?/g, '\n');
 }
 
 /* ------------------------------------------------------------------ */

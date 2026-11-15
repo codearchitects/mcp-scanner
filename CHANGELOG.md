@@ -7,6 +7,9 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ## [Unreleased]
 
 ### Added
+- A tuple (`[string, string, Details?]`, `readonly [string, ...number[]]`) is published as an array with `prefixItems` (one schema per position), `minItems` (its required positions), and either the rest element as `items` or `maxItems` and `items: false`. It used to be expanded as an object listing the members of an array.
+- A property typed `never` (or `undefined` alone, as `x?: never` resolves under strict null checks) is published as the schema `false`, outside `required`: it can only be absent, and a client validating its arguments is told so.
+- A property declared `readonly`, or documented with `@readonly`, carries `"readOnly": true`.
 - MCP `outputSchema` for tools published over MCP. The scanner derives it from the method's return type: a `Promise` is unwrapped and the type of its `structuredContent` property is converted to JSON Schema, exactly as `inputSchema` is derived from the parameters. It is written into the MCP manifest entry (`IMcpManifestTool.outputSchema`, `IScannedTool.outputSchema`) and never into `package.json`.
 - `outputSchema` option on `@ExposeTool` and `@Tool`, written as a JSON literal, to state the schema explicitly; it overrides the derived one. Generated proxies carry it in their `@Tool` (the default scaffold renders it).
 - `assertValidMcpOutputSchemas(tools)`, exported and run by `serializeMcpManifest` and the CLI: an `outputSchema` root must be `{ "type": "object" }`. MCP 2025-11-25 and earlier require it; MCP 2026-07-28 allows any JSON value, but an object root is valid in every version, so it is the only root the scanner writes.
@@ -17,6 +20,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - A tool that takes no argument — no parameter, or a parameter type with no field and no index signature (`{}`, an empty interface) — now gets the inputSchema `{ "type": "object", "additionalProperties": false }`, the form MCP recommends, instead of `{ "type": "object", "properties": {} }`: only an empty object is accepted. `Record<string, unknown>` keeps an open schema.
 
 ### Fixed
+- A manifest scanned from sources checked out with Windows line endings carried `
+` in the descriptions taken from JSDoc, so it differed from one scanned on macOS or Linux. Every text of a manifest is now written with `
+`.
+- The default proxy template wrote the name, display name, description and icon of a tool between single quotes without escaping them: an apostrophe, a backslash or a line break ended the literal and the generated proxy did not compile. They are now escaped.
 - When the branches of a union of objects shared a field with different types, the merged schema kept only the first branch's type, so data of the other branches did not validate. The field is now the `anyOf` of the distinct types of every branch.
 - A value typed `unknown` or `any` was emitted as `{ "type": "object" }`; it is now `{}`, which accepts any JSON value. An array typed `never[]` (an empty array literal) is `{ "type": "array", "maxItems": 0 }`.
 - A property typed `T | undefined` without `?` was emitted as required, with an `anyOf` whose `undefined` branch read `{ "type": "object" }`; `null` was emitted the same way. `undefined` is never serialized to JSON, so such a property is now optional and its schema is `T` alone (`boolean | undefined` is a `boolean`); `null` is `{ "type": "null" }`. Applies to `inputSchema` and `outputSchema` alike.
