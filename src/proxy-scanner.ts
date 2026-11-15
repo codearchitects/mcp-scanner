@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as ts from 'typescript';
 import type { IExposeToolOptions } from './decorators';
-import { literalToJson } from './scanner/json-literal';
+import { literalToJson, readToolAnnotations } from './scanner/json-literal';
 
 /**
  * Proxy method parameter metadata.
@@ -655,6 +655,9 @@ export function scanProjectForProxies(
             const icon = getStringProperty(argsObj, 'icon');
             const canBeReferencedInPrompt = getBooleanProperty(argsObj, 'canBeReferencedInPrompt');
             const outputSchema = readOutputSchemaOption(argsObj, toolName, diagnostics);
+            const annotationsProp = argsObj.properties.find((p): p is ts.PropertyAssignment =>
+              ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'annotations');
+            const annotations = annotationsProp ? readToolAnnotations(annotationsProp.initializer)?.annotations : undefined;
 
             const methodName = member.name?.getText(sourceFile) ?? 'unnamedMethod';
             const returnTypeText = member.type ? member.type.getText(sourceFile) : 'Promise<unknown>';
@@ -667,6 +670,7 @@ export function scanProjectForProxies(
               ...(icon && { icon }),
               ...(canBeReferencedInPrompt !== undefined && { canBeReferencedInPrompt }),
               ...(outputSchema && { outputSchema }),
+              ...(annotations && { annotations }),
             };
 
             methods.push({

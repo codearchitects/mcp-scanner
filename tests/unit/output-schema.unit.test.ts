@@ -29,13 +29,13 @@ interface IData {
 }
 `;
 
-function scan(body: string, options: IScanOptions = {}): { tools: IScannedTool[]; diagnostics: string[] } {
+function scan(body: string, options: IScanOptions = {}, topLevel = ''): { tools: IScannedTool[]; diagnostics: string[] } {
   const root = makeTempDir();
   writeFile(path.join(root, 'tsconfig.json'), JSON.stringify({
     compilerOptions: { target: 'ES2022', module: 'commonjs', strict: true, experimentalDecorators: true },
     include: ['src/**/*.ts'],
   }));
-  writeFile(path.join(root, 'src', 'tools.ts'), `${PRELUDE}\nclass Tools {\n${body}\n}\n`);
+  writeFile(path.join(root, 'src', 'tools.ts'), `${PRELUDE}\n${topLevel}\nclass Tools {\n${body}\n}\n`);
   const result = scanProject(root, 'tsconfig.json', undefined, [], { defaultTransport: ['mcp'], ...options });
   return { tools: result.tools, diagnostics: result.diagnostics };
 }
@@ -153,5 +153,87 @@ describe('a refused root names why', () => {
     expect(diagnostics[0]).toMatch(/every MCP version/);
     expect(diagnostics[0]).toMatch(/2025-11-25/);
     expect(diagnostics[0]).toMatch(/wrap the data in an object/);
+  });
+});
+
+describe('outputSchema of composed data types', () => {
+  const STAMPED = `
+type Stamped<T> = T extends unknown
+  ? Omit<T, 'warnings' | 'elapsedMs'> & {
+    /** what the call noticed */
+    warnings: string[];
+    /** how long it took */
+    elapsedMs: number;
+  }
+  : never;
+`;
+
+  it('expands an intersection of object types into one object', () => {
+    const { tools } = scan(tool('intersected', 'Promise<IMcpToolResult<IData & { elapsedMs: number }>>'));
+    const schema = tools[0].outputSchema as { properties: Record<string, unknown>; required: string[] };
+
+    expect(Object.keys(schema.properties).sort()).toEqual(['count', 'elapsedMs', 'items', 'note']);
+    expect(schema.required.sort()).toEqual(['count', 'elapsedMs', 'items']);
+  });
+
+  it('expands the properties of a mapped type such as Omit, keeping their optionality and descriptions', () => {
+    const { tools } = scan(tool('omitted', "Promise<IMcpToolResult<Omit<IData, 'items'> & { warnings?: string[] }>>"));
+
+    expect(tools[0].outputSchema).toEqual({
+      type: 'object',
+      properties: {
+        count: { type: 'number', description: 'how many items' },
+        note: { type: 'string' },
+        warnings: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['count'],
+    });
+  });
+
+  it('expands a distributive alias over an object, as a tool stamping its data writes it', () => {
+    const { tools, diagnostics } = scan(tool('stamped', 'Promise<IMcpToolResult<Stamped<{ document: string; changed: string[] }>>>'), {}, STAMPED);
+    const schema = tools[0].outputSchema as { properties: Record<string, { description?: string }>; required: string[] };
+
+    expect(diagnostics.join('\n')).not.toMatch(/stamped/);
+    expect(Object.keys(schema.properties).sort()).toEqual(['changed', 'document', 'elapsedMs', 'warnings']);
+    expect(schema.required.sort()).toEqual(['changed', 'document', 'elapsedMs', 'warnings']);
+    expect(schema.properties.elapsedMs.description).toBe('how long it took');
+  });
+});
+
+describe('properties that may be undefined or null', () => {
+  it('makes a property typed `T | undefined` optional, without an undefined branch, and keeps null as null', () => {
+    const { tools } = scan(tool('loose', 'Promise<IMcpToolResult<{ id: string; description: string | undefined; parent: string | null; size: number | string | undefined }>>'));
+
+    expect(tools[0].outputSchema).toEqual({
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        description: { type: 'string' },
+        parent: { anyOf: [{ type: 'null' }, { type: 'string' }] },
+        size: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+      },
+      required: ['id', 'parent'],
+    });
+  });
+});
+
+describe('outputSchema of results whose branches differ', () => {
+  it('keeps every branch of a field that differs between the branches of a result', () => {
+    const { tools } = scan(tool('branches', 'Promise<IMcpToolResult<{ passed: true; projects: never[]; done: string } | { passed: boolean; projects: string[]; done: string }>>'));
+    const schema = tools[0].outputSchema as { properties: Record<string, unknown>; required: string[] };
+
+    expect(schema.properties.passed).toEqual({ anyOf: [{ type: 'boolean', enum: [true] }, { type: 'boolean' }] });
+    expect(schema.properties.projects).toEqual({ anyOf: [{ type: 'array', maxItems: 0 }, { type: 'array', items: { type: 'string' } }] });
+    expect(schema.properties.done).toEqual({ type: 'string' });
+    expect(schema.required.sort()).toEqual(['done', 'passed', 'projects']);
+  });
+
+  it('accepts any JSON value for a field typed unknown or any', () => {
+    const { tools } = scan(tool('opaque', 'Promise<IMcpToolResult<{ commandId: string; result: unknown; raw: any }>>'));
+    const schema = tools[0].outputSchema as { properties: Record<string, unknown> };
+
+    expect(schema.properties.result).toEqual({});
+    expect(schema.properties.raw).toEqual({});
   });
 });

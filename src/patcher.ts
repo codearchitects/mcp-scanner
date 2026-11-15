@@ -236,8 +236,8 @@ export function patchPackageJsonContent(
   const generatedEntries: unknown[] = lmTools.map((tool) => {
     // Strip routing-only fields — they are internal to mcp-scanner and must not
     // appear in the VS Code `languageModelTools` manifest entries — and the MCP-only
-    // outputSchema, which VS Code language model tools do not have.
-    const { transports: _transports, mcpServers: _mcpServers, outputSchema: _outputSchema, ...entry } = tool;
+    // outputSchema and annotations, which VS Code language model tools do not have.
+    const { transports: _transports, mcpServers: _mcpServers, outputSchema: _outputSchema, annotations: _annotations, ...entry } = tool;
 
     if (!toolTag) {
       return entry;

@@ -3,6 +3,41 @@
 /* ------------------------------------------------------------------ */
 
 import * as ts from 'typescript';
+import type { IToolAnnotations } from '../decorators';
+
+/** The supported MCP `ToolAnnotations` fields, with the JSON type each must have. */
+const ANNOTATION_FIELDS: Record<keyof IToolAnnotations, 'boolean'> = {
+  readOnlyHint: 'boolean',
+};
+
+/**
+ * Read an `annotations` decorator option: the supported `ToolAnnotations` fields of the right type,
+ * and the keys it drops (unsupported, or of the wrong type).
+ *
+ * @param expr The option's initializer.
+ * @returns `undefined` when it is not an object literal; otherwise the kept annotations (absent
+ *   when none is kept) and the dropped keys.
+ */
+export function readToolAnnotations(expr: ts.Expression): { annotations?: IToolAnnotations; dropped: string[] } | undefined {
+  const read = literalToJson(expr);
+  const value = read?.value;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const annotations: Record<string, unknown> = {};
+  const dropped: string[] = [];
+  for (const [key, field] of Object.entries(value as Record<string, unknown>)) {
+    const expected = (ANNOTATION_FIELDS as Record<string, string | undefined>)[key];
+    if (expected !== undefined && typeof field === expected) {
+      annotations[key] = field;
+    } else {
+      dropped.push(key);
+    }
+  }
+  return Object.keys(annotations).length > 0
+    ? { annotations: annotations as IToolAnnotations, dropped }
+    : { dropped };
+}
 
 /**
  * Read a JSON literal written in the source — an object, array, string, number, boolean or `null`,

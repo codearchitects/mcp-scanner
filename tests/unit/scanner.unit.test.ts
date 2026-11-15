@@ -260,7 +260,8 @@ class Advanced {
     expect((schema.properties.nested.properties as Record<string, unknown>).deep).toBeTruthy();
 
     const noParam = result.tools.find((t) => t.name === 'noParamTool');
-    expect(noParam?.inputSchema).toEqual({ type: 'object', properties: {} });
+    // A tool with no argument accepts only an empty object, as MCP recommends.
+    expect(noParam?.inputSchema).toEqual({ type: 'object', additionalProperties: false });
   });
 
   it('extracts tools and schema from @Tool decorated methods', () => {

@@ -161,6 +161,7 @@ Then declare it in your extension's `package.json`:
 | `canBeReferencedInPrompt` | `boolean` | | Allow `#tool` references. Default: `true` |
 | `transports` | `('lm' \| 'mcp')[]` | | Where to publish the tool. `'lm'` → `package.json`; `'mcp'` → MCP manifest sidecar. Default: `['lm']` |
 | `mcpServers` | `string[]` | | Names of the MCP server groups the tool belongs to (only when `transports` includes `'mcp'`). Overrides the CLI `--tools-tag`. Omitted → the CLI `--tools-tag`, else the `default` group |
+| `annotations` | `IToolAnnotations` | | MCP tool annotations, in the shape of the MCP TypeScript SDK's `registerTool` config. Only `readOnlyHint` is supported: `{ readOnlyHint?: boolean }`. Written as is into the MCP manifest; omitted → no annotation, and clients apply the MCP default (not read-only). Any other key (including the MCP `title`, `destructiveHint`, `idempotentHint`, `openWorldHint`) and values of the wrong type are dropped with a diagnostic |
 | `outputSchema` | `object` | | Explicit MCP `outputSchema`, written as a JSON literal; its root must be `{ type: 'object' }`. Overrides the schema derived from the return type (see [Output schema](#output-schema)) |
 
 ### `Tool(options)` — Method Decorator
@@ -179,6 +180,7 @@ Accepts the same options as `@ExposeTool` but does not register the method as a 
 | `canBeReferencedInPrompt` | `boolean` | | Allow `#tool` references. Default: `true` |
 | `transports` | `('lm' \| 'mcp')[]` | | Where to publish the tool. Default: `['lm']` |
 | `mcpServers` | `string[]` | | MCP server groups the tool belongs to. Omitted → the `default` group |
+| `annotations` | `IToolAnnotations` | | MCP tool annotations (SDK shape). Generated proxies carry them in their `@Tool` |
 | `outputSchema` | `object` | | Explicit MCP `outputSchema` (JSON literal, object root). Generated proxies carry it in their `@Tool` |
 
 ### `registerExposedTools(context, instances)` — Runtime Registration
@@ -203,7 +205,7 @@ For `'mcp'`-targeting tools, mcp-scanner emits a fully-generated JSON sidecar pe
 - `readMcpManifestFile(path)` — runtime loader for MCP servers (returns `IMcpManifest`).
 - `groupMcpToolsByServer(tools)` — group scanned tools by their MCP server group.
 
-The manifest entries carry the native MCP `inputSchema` (JSON Schema), and an `outputSchema` when one can be stated (see below), so an embedded MCP server can answer `tools/list` directly without reading `package.json`. `assertValidMcpInputSchemas(tools)` and `assertValidMcpOutputSchemas(tools)` reject a schema whose root is not `{ "type": "object" }`; `serializeMcpManifest` and the CLI run both.
+The manifest entries carry the native MCP `inputSchema` (JSON Schema), an `outputSchema` when one can be stated (see below), and the tool's `annotations` when it states any, so an embedded MCP server can answer `tools/list` directly without reading `package.json`. A tool that takes no argument — no parameter, or a parameter type with no field and no index signature — gets `{ "type": "object", "additionalProperties": false }`, the form MCP recommends; `Record<string, unknown>` stays open. `assertValidMcpInputSchemas(tools)` and `assertValidMcpOutputSchemas(tools)` reject a schema whose root is not `{ "type": "object" }`; `serializeMcpManifest` and the CLI run both.
 
 ### Output schema
 

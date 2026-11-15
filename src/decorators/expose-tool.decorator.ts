@@ -6,6 +6,18 @@ import 'reflect-metadata';
 const EXPOSE_TOOL_KEY = Symbol('expose-tool');
 
 /**
+ * The supported subset of MCP `ToolAnnotations` (protocol 2026-07-28), in the shape of the MCP
+ * TypeScript SDK's `registerTool` config: only `readOnlyHint`. The other MCP annotations
+ * (`title`, `destructiveHint`, `idempotentHint`, `openWorldHint`) are not supported: the
+ * scanner drops them with a diagnostic. Annotations are hints; clients must not trust the
+ * annotations of untrusted servers.
+ */
+export interface IToolAnnotations {
+  /** If true, the tool does not modify its environment. MCP default: false. */
+  readOnlyHint?: boolean;
+}
+
+/**
  * Options for the {@link ExposeTool} method decorator.
  * Each decorated method becomes a VS Code Language Model Tool entry.
  */
@@ -48,6 +60,12 @@ export interface IExposeToolOptions {
    * into the default MCP server group.
    */
   mcpServers?: string[];
+  /**
+   * MCP tool annotations — behaviour hints for clients, in the shape of the MCP TypeScript SDK's
+   * `registerTool` config. Written as is into the MCP manifest entry; when omitted no annotation is
+   * written, and a client applies the MCP defaults (e.g. not read-only).
+   */
+  annotations?: IToolAnnotations;
   /**
    * Explicit JSON Schema of the tool's structured result (MCP `outputSchema`), written as a JSON
    * literal. It overrides the schema the scanner derives from the type of the `structuredContent`

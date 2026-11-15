@@ -10,6 +10,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import type { IToolAnnotations } from './decorators';
 import type { IScannedTool } from './scanner';
 
 /* ------------------------------------------------------------------ */
@@ -71,6 +72,11 @@ export interface IMcpManifestTool {
    * every MCP version accepts.
    */
   outputSchema?: Record<string, unknown>;
+
+  /**
+   * MCP tool annotations (`ToolAnnotations`), present only when the tool states any.
+   */
+  annotations?: IToolAnnotations;
 
   /**
    * Optional tool tags used for grouping/filtering.
@@ -255,6 +261,7 @@ function toManifestTool(tool: IScannedTool): IMcpManifestTool {
     canBeReferencedInPrompt: tool.canBeReferencedInPrompt,
     inputSchema: tool.inputSchema,
     ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
+    ...(tool.annotations ? { annotations: tool.annotations } : {}),
     ...(tool.tags && tool.tags.length > 0 ? { tags: tool.tags } : {}),
   };
 }

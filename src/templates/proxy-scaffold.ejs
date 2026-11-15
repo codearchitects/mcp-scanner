@@ -26,6 +26,9 @@ export class <%- className %> {
 <% if (method.toolOptions.canBeReferencedInPrompt !== undefined) { -%>
     canBeReferencedInPrompt: <%- method.toolOptions.canBeReferencedInPrompt ? 'true' : 'false' %>,
 <% } -%>
+<% if (method.toolOptions.annotations) { -%>
+    annotations: <%- JSON.stringify(method.toolOptions.annotations) %>,
+<% } -%>
 <% if (method.toolOptions.outputSchema) { -%>
     outputSchema: <%- JSON.stringify(method.toolOptions.outputSchema) %>,
 <% } -%>

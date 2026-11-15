@@ -129,3 +129,25 @@ describe('the outputSchema option', () => {
     expect(getTools(TypedService)[0].outputSchema).toEqual(outputSchema);
   });
 });
+
+describe('the annotations option', () => {
+  it('is accepted and kept by @ExposeTool and @Tool, in the shape of the MCP TypeScript SDK', () => {
+    class ReadOnlyService {
+      @ExposeTool({ name: 'readExposed', displayName: 'Read', modelDescription: 'Read', annotations: { readOnlyHint: true } })
+      public exposed(): void {
+        // no-op
+      }
+
+      @Tool({
+        name: 'writeTool', displayName: 'Write', modelDescription: 'Write',
+        annotations: { readOnlyHint: false },
+      })
+      public tool(): void {
+        // no-op
+      }
+    }
+
+    expect(getExposedTools(ReadOnlyService)[0].annotations).toEqual({ readOnlyHint: true });
+    expect(getTools(ReadOnlyService)[0].annotations).toEqual({ readOnlyHint: false });
+  });
+});
