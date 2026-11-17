@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
-## [Unreleased]
+## [1.4.0]
 
 ### Added
 - A tuple (`[string, string, Details?]`, `readonly [string, ...number[]]`) is published as an array with `prefixItems` (one schema per position), `minItems` (its required positions), and either the rest element as `items` or `maxItems` and `items: false`. It used to be expanded as an object listing the members of an array.
