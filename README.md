@@ -161,6 +161,8 @@ Then declare it in your extension's `package.json`:
 | `canBeReferencedInPrompt` | `boolean` | | Allow `#tool` references. Default: `true` |
 | `transports` | `('lm' \| 'mcp')[]` | | Where to publish the tool. `'lm'` → `package.json`; `'mcp'` → MCP manifest sidecar. Default: `['lm']` |
 | `mcpServers` | `string[]` | | Names of the MCP server groups the tool belongs to (only when `transports` includes `'mcp'`). Overrides the CLI `--tools-tag`. Omitted → the CLI `--tools-tag`, else the `default` group |
+| `annotations` | `IToolAnnotations` | | MCP tool annotations, in the shape of the MCP TypeScript SDK's `registerTool` config. Only `readOnlyHint` is supported: `{ readOnlyHint?: boolean }`. Written as is into the MCP manifest; omitted → no annotation, and clients apply the MCP default (not read-only). Any other key (including the MCP `title`, `destructiveHint`, `idempotentHint`, `openWorldHint`) and values of the wrong type are dropped with a diagnostic |
+| `outputSchema` | `object` | | Explicit MCP `outputSchema`, written as a JSON literal; its root must be `{ type: 'object' }`. Overrides the schema derived from the return type (see [Output schema](#output-schema)) |
 
 ### `Tool(options)` — Method Decorator
 
@@ -178,6 +180,8 @@ Accepts the same options as `@ExposeTool` but does not register the method as a 
 | `canBeReferencedInPrompt` | `boolean` | | Allow `#tool` references. Default: `true` |
 | `transports` | `('lm' \| 'mcp')[]` | | Where to publish the tool. Default: `['lm']` |
 | `mcpServers` | `string[]` | | MCP server groups the tool belongs to. Omitted → the `default` group |
+| `annotations` | `IToolAnnotations` | | MCP tool annotations (SDK shape). Generated proxies carry them in their `@Tool` |
+| `outputSchema` | `object` | | Explicit MCP `outputSchema` (JSON literal, object root). Generated proxies carry it in their `@Tool` |
 
 ### `registerExposedTools(context, instances)` — Runtime Registration
 
@@ -201,7 +205,37 @@ For `'mcp'`-targeting tools, mcp-scanner emits a fully-generated JSON sidecar pe
 - `readMcpManifestFile(path)` — runtime loader for MCP servers (returns `IMcpManifest`).
 - `groupMcpToolsByServer(tools)` — group scanned tools by their MCP server group.
 
-The manifest entries carry the native MCP `inputSchema` (JSON Schema), so an embedded MCP server can answer `tools/list` directly without reading `package.json`.
+The manifest entries carry the native MCP `inputSchema` (JSON Schema), an `outputSchema` when one can be stated (see below), and the tool's `annotations` when it states any, so an embedded MCP server can answer `tools/list` directly without reading `package.json`. A tool that takes no argument — no parameter, or a parameter type with no field and no index signature — gets `{ "type": "object", "additionalProperties": false }`, the form MCP recommends; `Record<string, unknown>` stays open. `assertValidMcpInputSchemas(tools)` and `assertValidMcpOutputSchemas(tools)` reject a schema whose root is not `{ "type": "object" }`; `serializeMcpManifest` and the CLI run both.
+
+### Output schema
+
+For a tool published over MCP, the scanner derives the MCP `outputSchema` — the shape of the tool's
+`structuredContent` — from the method's return type, the same way it derives `inputSchema` from the
+parameters:
+
+1. an explicit `outputSchema` option wins;
+2. otherwise the return type is unwrapped (`Promise<R>` → `R`) and the type of its
+   `structuredContent` property is converted to JSON Schema. Any result type works, e.g.
+
+   ```ts
+   interface IMcpToolResult<T> { content?: { type: 'text'; text: string }[]; structuredContent?: T; isError?: boolean }
+
+   @ExposeTool({ name: 'listDocuments', displayName: 'List Documents', modelDescription: '…', transports: ['mcp'] })
+   async listDocuments(): Promise<IMcpToolResult<{ count: number; documents: IDocument[] }>> { … }
+   ```
+
+A server that publishes an `outputSchema` MUST return results that conform to it. So **no schema
+is written** — and a scan diagnostic names the tool and the reason — when the return type has no
+`structuredContent`, or its type is `unknown`, `any`, `never`, an empty object type or an index
+signature only (`Record<string, unknown>`): such a schema would state nothing. No schema is better
+than a false one.
+
+The **root** of every `outputSchema` the scanner writes is an object. MCP 2025-11-25 and earlier
+type `structuredContent` as a JSON object; MCP 2026-07-28 allows any JSON value, but an object is
+valid in every version, so a server works with clients of any version. A list or a primitive as
+`structuredContent` therefore gets no schema, and a diagnostic: wrap it in an object
+(`{ nodes: [...] }`). `assertValidMcpOutputSchemas` refuses a non-object root for the same reason.
+`outputSchema` is MCP-only: it never reaches `contributes.languageModelTools` in `package.json`.
 
 ### `patchPackageJsonFile(path, tools, options?)` — File Patcher
 

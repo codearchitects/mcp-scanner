@@ -108,3 +108,46 @@ describe('@Tool decorator', () => {
     expect(getTools(PlainService)).toEqual([]);
   });
 });
+
+describe('the outputSchema option', () => {
+  const outputSchema = { type: 'object', properties: { value: { type: 'number' } }, required: ['value'] };
+
+  it('is accepted and kept by @ExposeTool and @Tool', () => {
+    class TypedService {
+      @ExposeTool({ name: 'typedExposed', displayName: 'Typed', modelDescription: 'Typed', outputSchema })
+      public exposed(): void {
+        // no-op
+      }
+
+      @Tool({ name: 'typedTool', displayName: 'Typed', modelDescription: 'Typed', outputSchema })
+      public tool(): void {
+        // no-op
+      }
+    }
+
+    expect(getExposedTools(TypedService)[0].outputSchema).toEqual(outputSchema);
+    expect(getTools(TypedService)[0].outputSchema).toEqual(outputSchema);
+  });
+});
+
+describe('the annotations option', () => {
+  it('is accepted and kept by @ExposeTool and @Tool, in the shape of the MCP TypeScript SDK', () => {
+    class ReadOnlyService {
+      @ExposeTool({ name: 'readExposed', displayName: 'Read', modelDescription: 'Read', annotations: { readOnlyHint: true } })
+      public exposed(): void {
+        // no-op
+      }
+
+      @Tool({
+        name: 'writeTool', displayName: 'Write', modelDescription: 'Write',
+        annotations: { readOnlyHint: false },
+      })
+      public tool(): void {
+        // no-op
+      }
+    }
+
+    expect(getExposedTools(ReadOnlyService)[0].annotations).toEqual({ readOnlyHint: true });
+    expect(getTools(ReadOnlyService)[0].annotations).toEqual({ readOnlyHint: false });
+  });
+});

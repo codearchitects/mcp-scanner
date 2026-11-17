@@ -8,6 +8,8 @@
 
 import * as path from 'path';
 import * as ts from 'typescript';
+import type { IToolAnnotations } from '../decorators';
+import { literalToJson, readToolAnnotations } from './json-literal';
 
 /* ------------------------------------------------------------------ */
 /*  Public types                                                       */
@@ -60,6 +62,19 @@ export interface IScannedTool {
    * JSON Schema describing tool input.
    */
   inputSchema: Record<string, unknown>;
+
+  /**
+   * JSON Schema of the tool's structured result (MCP `outputSchema`), when it can be stated
+   * truthfully: the explicit `outputSchema` option, or the type of the `structuredContent` property
+   * of what the method returns. Its root is always an object. Absent when that type is missing, vague
+   * or not an object — a diagnostic then names the tool (see {@link extractOutputSchema}).
+   */
+  outputSchema?: Record<string, unknown>;
+
+  /**
+   * The `annotations` option of the decorator (MCP `ToolAnnotations`), when it states any.
+   */
+  annotations?: IToolAnnotations;
 
   /**
    * Optional tool tags used for grouping/filtering.
@@ -147,6 +162,310 @@ function isWithinExcludedPaths(filePath: string, excludedPaths: string[]): boole
  * @param visited Circular-reference guard set.
  * @returns JSON Schema object with expanded properties.
  */
+/**
+ * Whether a type is `undefined` or a union with an `undefined` member.
+ *
+ * @param type The type to inspect.
+ * @returns True when a value of the type may be undefined.
+ */
+function includesUndefined(type: ts.Type): boolean {
+  if (type.flags & ts.TypeFlags.Undefined) {
+    return true;
+  }
+  return !!(type.flags & ts.TypeFlags.Union) && (type as ts.UnionType).types.some((t) => t.flags & ts.TypeFlags.Undefined);
+}
+
+/**
+ * The type of a property symbol: read at its declaration when it has one, otherwise (a synthetic
+ * property of a mapped or intersection type) from the symbol itself.
+ *
+ * @param prop Property symbol.
+ * @param owner The type the property belongs to.
+ * @param checker Program type checker.
+ * @returns The property's type.
+ */
+function propertyType(prop: ts.Symbol, owner: ts.Type, checker: ts.TypeChecker): ts.Type {
+  const location = prop.valueDeclaration ?? prop.declarations?.[0] ?? (owner as { __location?: ts.Node }).__location;
+  // `getTypeOfSymbol` is public from TypeScript 5.1; older checkers still resolve it at a location.
+  const getTypeOfSymbol = (checker as { getTypeOfSymbol?: (symbol: ts.Symbol) => ts.Type }).getTypeOfSymbol;
+  if (!prop.valueDeclaration && getTypeOfSymbol) {
+    return getTypeOfSymbol.call(checker, prop);
+  }
+  return checker.getTypeOfSymbolAtLocation(prop, location as ts.Node);
+}
+
+/**
+ * Whether a property travels as JSON. A method, a function-typed property, a private or protected
+ * member (`private`, `protected`, `#name`) and an accessor of a class never do: `JSON.stringify`
+ * writes an object's own enumerable fields, and drops functions. Publishing them would describe an
+ * object nobody receives.
+ *
+ * @param prop Property symbol.
+ * @param propType Its type.
+ * @param checker Program type checker.
+ * @returns `true` when the property is data.
+ */
+function isDataMember(prop: ts.Symbol, propType: ts.Type, checker: ts.TypeChecker): boolean {
+  if (prop.name.startsWith('#')) {
+    return false;
+  }
+  for (const decl of prop.declarations ?? []) {
+    if (ts.isMethodDeclaration(decl) || ts.isMethodSignature(decl)) {
+      return false;
+    }
+    if ((ts.isGetAccessorDeclaration(decl) || ts.isSetAccessorDeclaration(decl)) && ts.isClassLike(decl.parent)) {
+      return false;
+    }
+    if (ts.getCombinedModifierFlags(decl as ts.Declaration) & (ts.ModifierFlags.Private | ts.ModifierFlags.Protected)) {
+      return false;
+    }
+  }
+  const value = checker.getNonNullableType(propType);
+  return !(value.flags & ts.TypeFlags.Object
+    && value.getProperties().length === 0
+    && checker.getSignaturesOfType(value, ts.SignatureKind.Call).length > 0);
+}
+
+/**
+ * The schema of a union's members (`undefined` already removed): an enum when every member is a
+ * string literal, otherwise an `anyOf` where `true` and `false` together are one `boolean` and the
+ * string literals together one enum.
+ *
+ * @param members The members of the union.
+ * @param checker Program type checker.
+ * @param visited Circular-reference guard set.
+ * @returns JSON Schema fragment.
+ */
+function unionMembersToSchema(members: ts.Type[], checker: ts.TypeChecker, visited: Set<string>): Record<string, unknown> {
+  if (members.length === 1) {
+    return typeToJsonSchemaFromType(members[0], checker, visited);
+  }
+  if (members.every((t) => t.flags & ts.TypeFlags.StringLiteral)) {
+    return { type: 'string', enum: members.map((t) => (t as ts.StringLiteralType).value) };
+  }
+  // `boolean` is `true | false` to the checker: both together are one boolean.
+  const booleans = members.filter((t) => t.flags & ts.TypeFlags.BooleanLiteral);
+  const isBoolean = booleans.length === 2;
+  if (isBoolean && members.length === 2) {
+    return { type: 'boolean' };
+  }
+  // The string literals of a mixed union (`IVerdict | 'defect' | 'gap'`) are one enum, in the
+  // place of the first of them.
+  const strings = members.filter((t) => t.flags & ts.TypeFlags.StringLiteral);
+  const branches: Record<string, unknown>[] = [];
+  for (const member of members) {
+    if (strings.length > 1 && member.flags & ts.TypeFlags.StringLiteral) {
+      if (member === strings[0]) {
+        branches.push({ type: 'string', enum: strings.map((t) => (t as ts.StringLiteralType).value) });
+      }
+      continue;
+    }
+    if (isBoolean && member.flags & ts.TypeFlags.BooleanLiteral) {
+      if (member === booleans[0]) {
+        branches.push({ type: 'boolean' });
+      }
+      continue;
+    }
+    branches.push(typeToJsonSchemaFromType(member, checker, visited));
+  }
+  return { anyOf: branches };
+}
+
+/**
+ * The recursive types met while one root schema is built: each is defined once under `$defs` and
+ * referenced with `$ref` where it recurs (see {@link withDefinitions}).
+ */
+interface ISchemaDefinitions {
+  /** The recursive types to define, by definition name, with the name the checker gives them. */
+  types: Map<string, { type: ts.Type; typeName: string }>;
+  /** The types already known to recur (from a first pass), by the checker's name: a `$ref` wherever they appear. */
+  known: ReadonlySet<string>;
+  /**
+   * The next type converted is expanded even when it is known to recur: it is the root, or the
+   * top level of the definition being built.
+   */
+  expandNext: boolean;
+}
+
+/** The definitions of the root schema being built; `undefined` outside {@link withDefinitions}. */
+let currentDefinitions: ISchemaDefinitions | undefined;
+
+/**
+ * The name of a type under `$defs`: its name, with every character a JSON Pointer or a reader would
+ * stumble on (`<`, `>`, spaces, `/`, `~`…) replaced.
+ *
+ * @param typeName The type's name, as the checker writes it.
+ * @returns The definition name.
+ */
+function definitionName(typeName: string): string {
+  const parts = typeName.split(/[^A-Za-z0-9.-]+/).filter((part) => part.length > 0);
+  return parts.length > 0 ? parts.join('_') : 'Type';
+}
+
+/**
+ * What a recursive type is where it recurs: a reference to its definition. Outside
+ * {@link withDefinitions} there is nowhere to define it, and the recursion is cut to an object.
+ *
+ * @param type The recursive type.
+ * @param typeName Its name.
+ * @returns The reference.
+ */
+function recursionTo(type: ts.Type, typeName: string): Record<string, unknown> {
+  if (!currentDefinitions) {
+    return { type: 'object' };
+  }
+  const name = definitionName(typeName);
+  currentDefinitions.types.set(name, { type, typeName });
+  return { $ref: `#/$defs/${name}` };
+}
+
+/**
+ * Whether a type already known to recur is referenced here instead of expanded: everywhere but
+ * the top level of its own definition.
+ *
+ * @param typeName The type's name.
+ * @returns `true` when the type is to be a `$ref` here.
+ */
+function isReferencedHere(typeName: string): boolean {
+  if (!currentDefinitions) {
+    return false;
+  }
+  if (currentDefinitions.expandNext) {
+    currentDefinitions.expandNext = false;
+    return false;
+  }
+  return currentDefinitions.known.has(typeName);
+}
+
+/**
+ * One pass of {@link withDefinitions}: the root schema, and the definition of every recursive type
+ * it references — and of every one met while defining those.
+ *
+ * @param checker Program type checker.
+ * @param build Builds the root schema.
+ * @param known The types to reference wherever they appear.
+ * @returns The root schema and its definitions.
+ */
+function definitionPass(
+  checker: ts.TypeChecker,
+  build: () => Record<string, unknown>,
+  known: ReadonlySet<string>,
+): { schema: Record<string, unknown>; defs: Record<string, Record<string, unknown>>; recurring: Set<string> } {
+  const definitions: ISchemaDefinitions = { types: new Map(), known, expandNext: true };
+  currentDefinitions = definitions;
+  const schema = build();
+  const defs: Record<string, Record<string, unknown>> = {};
+  for (let pending = [...definitions.types]; pending.length > 0; pending = [...definitions.types].filter(([name]) => !(name in defs))) {
+    for (const [name, { type }] of pending) {
+      definitions.expandNext = true;
+      defs[name] = typeToJsonSchemaFromType(type, checker, new Set());
+    }
+  }
+  return { schema, defs, recurring: new Set([...definitions.types.values()].map((t) => t.typeName)) };
+}
+
+/**
+ * Build a root schema, then define under `$defs` every recursive type it references. A recursive
+ * type is expanded once, in its definition, and referenced with `$ref` everywhere else: a first
+ * pass finds which types recur, a second builds the schema knowing them. Nothing is written when
+ * nothing recurs.
+ *
+ * @param checker Program type checker.
+ * @param build Builds the root schema.
+ * @returns The root schema, with its `$defs` when it has any.
+ */
+function withDefinitions(checker: ts.TypeChecker, build: () => Record<string, unknown>): Record<string, unknown> {
+  const outer = currentDefinitions;
+  try {
+    const first = definitionPass(checker, build, new Set());
+    if (Object.keys(first.defs).length === 0) {
+      return first.schema;
+    }
+    const { schema, defs } = definitionPass(checker, build, first.recurring);
+    return { ...schema, $defs: defs };
+  } finally {
+    currentDefinitions = outer;
+  }
+}
+
+/**
+ * Whether a property can never hold a JSON value: its type is `never`, or `undefined` alone
+ * (`x?: never` resolves to `undefined` under strict null checks). Undefined is never serialized,
+ * so the property can only be absent.
+ *
+ * @param prop Property symbol.
+ * @param propType Its type.
+ * @returns `true` when the property must never be given.
+ */
+function neverCarriesAValue(prop: ts.Symbol, propType: ts.Type): boolean {
+  const declared = prop.valueDeclaration ?? prop.declarations?.[0];
+  if (declared && (ts.isPropertySignature(declared) || ts.isPropertyDeclaration(declared)) && declared.type?.kind === ts.SyntaxKind.NeverKeyword) {
+    return true;
+  }
+  if (propType.flags & (ts.TypeFlags.Never | ts.TypeFlags.Undefined)) {
+    return true;
+  }
+  return !!(propType.flags & ts.TypeFlags.Union)
+    && (propType as ts.UnionType).types.every((t) => t.flags & (ts.TypeFlags.Never | ts.TypeFlags.Undefined));
+}
+
+/**
+ * Whether a property is only read: declared `readonly`, or documented with `@readonly`.
+ *
+ * @param prop Property symbol.
+ * @returns `true` when the schema marks it `readOnly`.
+ */
+function isReadOnlyMember(prop: ts.Symbol): boolean {
+  return (prop.declarations ?? []).some((decl) =>
+    !!(ts.getCombinedModifierFlags(decl as ts.Declaration) & ts.ModifierFlags.Readonly)
+    || ts.getJSDocTags(decl).some((tag) => tag.tagName.text === 'readonly'));
+}
+
+/**
+ * The schema of a tuple: one schema per fixed position (`prefixItems`), the number of required
+ * positions (`minItems`), and either the rest element as `items` or, without one, the number of all
+ * positions (`maxItems`) and `items: false`.
+ *
+ * @param type The tuple type.
+ * @param checker Program type checker.
+ * @param visited Circular-reference guard set.
+ * @returns JSON Schema fragment, or `undefined` when the type is not a tuple.
+ */
+function tupleToSchema(type: ts.Type, checker: ts.TypeChecker, visited: Set<string>): Record<string, unknown> | undefined {
+  const reference = type as ts.TypeReference;
+  const target = (type.flags & ts.TypeFlags.Object) && ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference)
+    ? reference.target as ts.TupleType
+    : undefined;
+  if (!target || !((target as ts.ObjectType).objectFlags & ts.ObjectFlags.Tuple)) {
+    return undefined;
+  }
+  const elements = checker.getTypeArguments(reference);
+  const flags = target.elementFlags;
+  const schemaOf = (element: ts.Type): Record<string, unknown> => {
+    const members = element.flags & ts.TypeFlags.Union
+      ? (element as ts.UnionType).types.filter((t) => !(t.flags & ts.TypeFlags.Undefined))
+      : [element];
+    return unionMembersToSchema(members, checker, visited);
+  };
+  const prefixItems: Record<string, unknown>[] = [];
+  let rest: Record<string, unknown> | undefined;
+  elements.forEach((element, index) => {
+    if (flags[index] & ts.ElementFlags.Variable) {
+      rest = schemaOf(element);
+    } else {
+      prefixItems.push(schemaOf(element));
+    }
+  });
+  const schema: Record<string, unknown> = { type: 'array', prefixItems, minItems: target.minLength };
+  if (rest) {
+    schema['items'] = rest;
+  } else {
+    schema['maxItems'] = prefixItems.length;
+    schema['items'] = false;
+  }
+  return schema;
+}
+
 function typeToJsonSchemaObject(
   type: ts.Type,
   checker: ts.TypeChecker,
@@ -159,11 +478,23 @@ function typeToJsonSchemaObject(
   for (const prop of props) {
     const propName = prop.name;
     
-    // Get the type of this property
-    let propType = checker.getTypeOfSymbolAtLocation(prop, prop.valueDeclaration || (type as any).__location);
-    
-    // Check if optional: if the type includes Undefined, it's optional
-    let isOptional = !!(propType.flags & ts.TypeFlags.Undefined);
+    // Get the type of this property. A property of a mapped type (Omit, Pick, Partial…) is
+    // synthetic: it has no declaration of its own to read the type at.
+    const propType = propertyType(prop, type, checker);
+    if (!isDataMember(prop, propType, checker)) {
+      continue;
+    }
+
+    // A property that can never hold a JSON value (`x?: never`, `x?: undefined`) must never be
+    // given: the schema `false` refuses it whatever `additionalProperties` allows. It is never required.
+    if (neverCarriesAValue(prop, propType)) {
+      properties[propName] = false;
+      continue;
+    }
+
+    // Check if optional: a property whose type includes undefined may be absent from the JSON
+    // (undefined is never serialized); a mapped property says so through its symbol flags.
+    let isOptional = includesUndefined(propType) || !!(prop.flags & ts.SymbolFlags.Optional);
     
     // Also check the declaration for ?: syntax
     if (!isOptional && prop.valueDeclaration) {
@@ -181,9 +512,7 @@ function typeToJsonSchemaObject(
         propSchema = typeToJsonSchemaFromType(nonUndefinedTypes[0], checker, visited);
       } else if (nonUndefinedTypes.length > 1) {
         // Optional union
-        propSchema = {
-          anyOf: nonUndefinedTypes.map((t) => typeToJsonSchemaFromType(t, checker, visited)),
-        };
+        propSchema = unionMembersToSchema(nonUndefinedTypes, checker, visited);
       } else {
         // Only undefined (shouldn't happen, but handle it)
         propSchema = { type: 'object' };
@@ -196,7 +525,10 @@ function typeToJsonSchemaObject(
     // Extract JSDoc description
     const jsDocComment = prop.getDocumentationComment(checker);
     if (jsDocComment && jsDocComment.length > 0) {
-      propSchema['description'] = jsDocComment.map((d) => d.text).join('');
+      propSchema['description'] = unixNewlines(jsDocComment.map((d) => d.text).join(''));
+    }
+    if (isReadOnlyMember(prop)) {
+      propSchema['readOnly'] = true;
     }
 
     properties[propName] = propSchema;
@@ -205,9 +537,20 @@ function typeToJsonSchemaObject(
     }
   }
 
-  const schema: Record<string, unknown> = { type: 'object', properties };
+  // A map (`Record<string, V>`, an index signature): its keys are free, its values are V. A JSON
+  // key is always a string, so a number-keyed signature says the same; a symbol key never travels.
+  const index = checker.getIndexInfosOfType(type).find((info) => !(info.keyType.flags & ts.TypeFlags.ESSymbolLike));
+  const additionalProperties = index ? typeToJsonSchemaFromType(index.type, checker, visited) : undefined;
+
+  const schema: Record<string, unknown> = { type: 'object' };
+  if (Object.keys(properties).length > 0 || !additionalProperties) {
+    schema['properties'] = properties;
+  }
   if (required.length > 0) {
     schema['required'] = required;
+  }
+  if (additionalProperties) {
+    schema['additionalProperties'] = additionalProperties;
   }
   return schema;
 }
@@ -226,11 +569,17 @@ function typeToJsonSchemaFromType(
   checker: ts.TypeChecker,
   visited: Set<string>,
 ): Record<string, unknown> {
+  // --- unknown / any: any JSON value, which is the empty schema (not an object) ---
+  if (type.flags & (ts.TypeFlags.Unknown | ts.TypeFlags.Any)) {
+    return {};
+  }
+
   const typeName = checker.typeToString(type);
 
-  // Circular reference guard
-  if (visited.has(typeName)) {
-    return { type: 'object' };
+  // A type met again inside itself recurs: it is defined once and referenced here, as is a type
+  // already known to recur, wherever it appears
+  if (visited.has(typeName) || isReferencedHere(typeName)) {
+    return recursionTo(type, typeName);
   }
 
   // --- String type ---
@@ -267,37 +616,48 @@ function typeToJsonSchemaFromType(
     return { type: 'boolean', enum: [isTrueLiteral] };
   }
 
+  // --- null: a JSON value of its own ---
+  if (type.flags & ts.TypeFlags.Null) {
+    return { type: 'null' };
+  }
+
   // --- Union type (includes enums and boolean literals) ---
   if (type.flags & ts.TypeFlags.Union) {
-    const unionType = type as ts.UnionType;
+    // undefined is never serialized to JSON: it makes a property optional (see
+    // typeToJsonSchemaObject), it is not a branch of its own.
+    const members = (type as ts.UnionType).types.filter((t) => !(t.flags & ts.TypeFlags.Undefined));
+    // A named union (`type JsonValue = … | JsonValue[]`) can contain itself: it is guarded as an object is.
+    return unionMembersToSchema(members, checker, type.aliasSymbol ? new Set(visited).add(typeName) : visited);
+  }
 
-    // Check if all members are string literals
-    const allStringLiterals = unionType.types.every((t) => t.flags & ts.TypeFlags.StringLiteral);
-    if (allStringLiterals) {
-      return {
-        type: 'string',
-        enum: unionType.types.map((t) => (t as ts.StringLiteralType).value),
-      };
-    }
+  // --- Intersection of object types (`A & B`, `Omit<T, K> & { … }`): one object with every member's properties ---
+  if (type.flags & ts.TypeFlags.Intersection && (type as ts.IntersectionType).types.every((t) => t.flags & ts.TypeFlags.Object)) {
+    return typeToJsonSchemaObject(type, checker, new Set(visited).add(typeName));
+  }
 
-    // Mixed union
-    return {
-      anyOf: unionType.types.map((t) => typeToJsonSchemaFromType(t, checker, visited)),
-    };
+  // --- Tuple: a list of fixed shape, read-only or not ---
+  const tuple = tupleToSchema(type, checker, visited);
+  if (tuple) {
+    return tuple;
   }
 
   // --- Object type (interface, class, type literal, or array) ---
   if (type.flags & ts.TypeFlags.Object) {
-    visited.add(typeName);
+    // A list recurs through its element type, which is guarded itself; only a named list
+    // (`type T = T[]`) can contain itself.
+    if (!checker.isArrayType(type) || type.aliasSymbol) {
+      visited = new Set(visited).add(typeName);
+    }
 
-    // Check if this is an array type by examining the symbol name
-    const typeAsObj = type as ts.ObjectType;
-    const typeSymbol = typeAsObj.symbol;
-    
-    if (typeSymbol && (typeSymbol.escapedName === 'Array' || typeSymbol.name === 'Array')) {
+    // A list, read-only (`readonly T[]`, `ReadonlyArray<T>`) or not: JSON has one kind of list
+    if (checker.isArrayType(type)) {
       // It's an array - get the element type from type arguments
       const typeRef = type as ts.TypeReference;
       const typeArgs = checker.getTypeArguments(typeRef);
+      // `never[]` (an empty array literal) can only ever be empty
+      if (typeArgs && typeArgs.length > 0 && typeArgs[0].flags & ts.TypeFlags.Never) {
+        return { type: 'array', maxItems: 0 };
+      }
       if (typeArgs && typeArgs.length > 0) {
         return {
           type: 'array',
@@ -345,7 +705,7 @@ function typeNodeToJsonSchema(
     if (visited.has(typeName)) {
       return { type: 'object' };
     }
-    visited.add(typeName);
+    visited = new Set(visited).add(typeName);
 
     // First, try the original method: getSymbolAtLocation
     const symbol = checker.getSymbolAtLocation(typeNode.typeName);
@@ -538,9 +898,20 @@ function getJsDocDescription(node: ts.Node): string | undefined {
   }
   const comment = jsDocs[0].comment;
   if (typeof comment === 'string') {
-    return comment;
+    return unixNewlines(comment);
   }
   return undefined;
+}
+
+/**
+ * A text with Unix line endings: the JSDoc of a source checked out on Windows keeps its `\r\n`, and
+ * a manifest must not change with the system that scans it.
+ *
+ * @param text The text.
+ * @returns The text, every `\r\n` and lone `\r` written as `\n`.
+ */
+export function unixNewlines(text: string): string {
+  return text.replace(/\r\n?/g, '\n');
 }
 
 /* ------------------------------------------------------------------ */
@@ -711,6 +1082,34 @@ function stripUndefinedBranches(type: ts.Type): ts.Type[] {
  * @param branches Object-typed schema branches.
  * @returns Merged root object schema.
  */
+/**
+ * The schema accepting what either schema accepts: one of them when they are equal, otherwise an
+ * `anyOf` of their distinct alternatives (an existing `anyOf` is flattened, not nested).
+ *
+ * @param a A schema.
+ * @param b Another schema.
+ * @returns The union of the two.
+ */
+function unionOfSchemas(a: Record<string, unknown>, b: Record<string, unknown>): Record<string, unknown> {
+  const alternatives = (schema: Record<string, unknown>): Record<string, unknown>[] =>
+    Array.isArray(schema.anyOf) && Object.keys(schema).length === 1 ? (schema.anyOf as Record<string, unknown>[]) : [schema];
+  let distinct: Record<string, unknown>[] = [];
+  for (const alternative of [...alternatives(a), ...alternatives(b)]) {
+    if (!distinct.some((seen) => JSON.stringify(seen) === JSON.stringify(alternative))) {
+      distinct.push(alternative);
+    }
+  }
+  // `true` in one branch and `false` in another: together, a boolean.
+  const literal = (s: Record<string, unknown>, value: boolean): boolean =>
+    s.type === 'boolean' && Array.isArray(s.enum) && s.enum.length === 1 && s.enum[0] === value && Object.keys(s).length === 2;
+  if (distinct.some((s) => literal(s, true)) && distinct.some((s) => literal(s, false))) {
+    const at = distinct.findIndex((s) => literal(s, true) || literal(s, false));
+    distinct = distinct.filter((s, i) => i === at || !(literal(s, true) || literal(s, false)));
+    distinct[at] = { type: 'boolean' };
+  }
+  return distinct.length === 1 ? distinct[0] : { anyOf: distinct };
+}
+
 function mergeObjectSchemaBranches(
   branches: Record<string, unknown>[],
 ): Record<string, unknown> {
@@ -720,9 +1119,7 @@ function mergeObjectSchemaBranches(
   for (const branch of branches) {
     const props = (branch.properties as Record<string, unknown> | undefined) ?? {};
     for (const [key, value] of Object.entries(props)) {
-      if (!(key in properties)) {
-        properties[key] = value;
-      }
+      properties[key] = key in properties ? unionOfSchemas(properties[key] as Record<string, unknown>, value as Record<string, unknown>) : value;
     }
     const req = branch.required;
     requiredSets.push(new Set(Array.isArray(req) ? (req as string[]) : []));
@@ -735,6 +1132,14 @@ function mergeObjectSchemaBranches(
     if (intersection.length > 0) {
       schema.required = intersection;
     }
+  }
+  // A branch that is a map says what its other fields are: the merge keeps it, the union of what
+  // the branches say, for the fields none of them declares.
+  const extra = branches
+    .map((branch) => branch.additionalProperties)
+    .filter((value): value is Record<string, unknown> => typeof value === 'object' && value !== null);
+  if (extra.length > 0) {
+    schema.additionalProperties = extra.reduce((all, one) => unionOfSchemas(all, one));
   }
   return schema;
 }
@@ -777,6 +1182,31 @@ function normalizeRootObjectSchema(schema: Record<string, unknown>): Record<stri
 }
 
 /**
+ * The inputSchema of a tool that takes no argument: only an empty object is accepted, as MCP
+ * recommends (`{ "type": "object", "additionalProperties": false }`).
+ */
+const NO_ARGUMENT_SCHEMA: Readonly<Record<string, unknown>> = { type: 'object', additionalProperties: false };
+
+/**
+ * True when a parameter type states no field at all: every non-undefined branch is an object type
+ * with no property and no index signature (`{}`, an empty interface). `Record<string, unknown>`
+ * is not one: its index signature accepts any field.
+ *
+ * @param type Resolved parameter type.
+ * @param checker Program type checker.
+ * @returns `true` when the tool takes no argument.
+ */
+function takesNoArgument(type: ts.Type, checker: ts.TypeChecker): boolean {
+  const branches = stripUndefinedBranches(type);
+  return branches.length > 0 && branches.every((t) =>
+    !!(t.flags & ts.TypeFlags.Object)
+    && !checker.isArrayType(t)
+    && t.getProperties().length === 0
+    && checker.getIndexInfosOfType(t).length === 0
+    && checker.getSignaturesOfType(t, ts.SignatureKind.Call).length === 0);
+}
+
+/**
  * Given a method declaration, find its first parameter's type node and
  * produce a JSON Schema from it.
  *
@@ -793,10 +1223,40 @@ function extractInputSchema(
   checker: ts.TypeChecker,
 ): Record<string, unknown> {
   const firstParam = method.parameters[0];
-  if (!firstParam || !firstParam.type) {
+  if (!firstParam) {
+    return { ...NO_ARGUMENT_SCHEMA };
+  }
+  if (!firstParam.type) {
     return { type: 'object', properties: {} };
   }
+  if (takesNoArgument(checker.getTypeAtLocation(firstParam), checker)) {
+    return { ...NO_ARGUMENT_SCHEMA };
+  }
 
+  // The recursive types of the parameter are defined under the root's $defs.
+  let schema = withDefinitions(checker, () => normalizeRootObjectSchema(parameterSchema(firstParam, checker)));
+
+  // An optional-marker parameter (`params?: IFoo`) means every property is
+  // optional at the boundary — the whole payload is optional, so no root
+  // property can be required. A default initializer (`params: IFoo = {}`) is
+  // NOT treated the same: the caller still passes an IFoo, so required is
+  // preserved (matches the "unchanged behaviour" acceptance criterion).
+  if (firstParam.questionToken && 'required' in schema) {
+    const { required: _required, ...rest } = schema;
+    schema = rest;
+  }
+
+  return schema;
+}
+
+/**
+ * The JSON Schema of a parameter's type, before the root is normalized.
+ *
+ * @param firstParam The parameter, which has a type annotation.
+ * @param checker Program type checker.
+ * @returns JSON Schema fragment.
+ */
+function parameterSchema(firstParam: ts.ParameterDeclaration, checker: ts.TypeChecker): Record<string, unknown> {
   // Try to resolve using the Type API first (handles imported types better).
   let schema: Record<string, unknown> | undefined;
   try {
@@ -819,23 +1279,204 @@ function extractInputSchema(
     // Fallback to TypeNode-based resolution.
   }
 
-  if (!schema) {
-    schema = typeNodeToJsonSchema(firstParam.type, checker);
+  return schema ?? typeNodeToJsonSchema(firstParam.type as ts.TypeNode, checker);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Output schema                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Find a property of a decorator's options object.
+ *
+ * @param obj Decorator options object literal.
+ * @param name Property name.
+ * @returns The property's initializer, or `undefined` when absent.
+ */
+function getPropertyInitializer(obj: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
+  for (const prop of obj.properties) {
+    if (ts.isPropertyAssignment(prop) && prop.name && ts.isIdentifier(prop.name) && prop.name.text === name) {
+      return prop.initializer;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Read the `annotations` option of a decorator, reporting every key it drops.
+ *
+ * @param obj Decorator options object literal.
+ * @param toolName Tool name, for the diagnostics.
+ * @param diagnostics Accumulator for scan diagnostics.
+ * @returns The kept annotations, or `undefined` when the option is absent or states none.
+ */
+function readAnnotationsOption(
+  obj: ts.ObjectLiteralExpression,
+  toolName: string,
+  diagnostics: string[],
+): IToolAnnotations | undefined {
+  const initializer = getPropertyInitializer(obj, 'annotations');
+  if (!initializer) {
+    return undefined;
+  }
+  const read = readToolAnnotations(initializer);
+  if (!read) {
+    diagnostics.push(`${toolName}: annotations ignored — the option must be an object literal of MCP ToolAnnotations.`);
+    return undefined;
+  }
+  for (const key of read.dropped) {
+    diagnostics.push(`${toolName}: annotations.${key} ignored — the only supported annotation is readOnlyHint (boolean).`);
+  }
+  return read.annotations;
+}
+
+/** What {@link extractOutputSchema} concluded: a schema, or why none can be written. */
+type IOutputSchemaVerdict = { schema: Record<string, unknown> } | { reason: string };
+
+/** True for a JSON Schema whose root is an object. */
+function isObjectRootSchema(schema: unknown): boolean {
+  return typeof schema === 'object' && schema !== null && !Array.isArray(schema)
+    && (schema as Record<string, unknown>).type === 'object';
+}
+
+/**
+ * Why a non-object root is refused. MCP 2025-11-25 and earlier type `structuredContent` and the
+ * `outputSchema` root as a JSON object; MCP 2026-07-28 allows any JSON value, but an object root is
+ * valid in every version, so it is the only root this scanner writes.
+ */
+const OBJECT_ROOT_REASON =
+  'an outputSchema root must be a JSON object, which every MCP version accepts (2025-11-25 and earlier '
+  + 'require it): wrap the data in an object';
+
+/**
+ * The outputSchema of a tool: its explicit `outputSchema` option when given, otherwise the JSON
+ * Schema of the type of the `structuredContent` property of what the method returns (a Promise is
+ * unwrapped), built exactly as an inputSchema is.
+ *
+ * A server that publishes an outputSchema MUST return results that conform to it, so no schema is
+ * written — and the verdict says why — when the return type has no `structuredContent`, or its type
+ * is `unknown`, `any`, `never`, an empty object or an index signature only (`Record<string,
+ * unknown>`): such a schema would state nothing. A type that is not an object — a list, a
+ * primitive — gets no schema either: the root is always an object (see {@link OBJECT_ROOT_REASON}).
+ *
+ * @param method Method declaration.
+ * @param checker Program type checker.
+ * @param explicit The `outputSchema` option's initializer, when the decorator has one.
+ * @returns The schema, or the reason none is written.
+ */
+function extractOutputSchema(
+  method: ts.MethodDeclaration,
+  checker: ts.TypeChecker,
+  explicit: ts.Expression | undefined,
+): IOutputSchemaVerdict {
+  if (explicit) {
+    return explicitOutputSchema(explicit);
+  }
+  const data = structuredContentType(method, checker);
+  return 'reason' in data ? data : dataOutputSchema(data.type, checker);
+}
+
+/**
+ * The verdict on an explicit `outputSchema` option.
+ *
+ * @param explicit The option's initializer.
+ * @returns The schema, or why it is refused.
+ */
+function explicitOutputSchema(explicit: ts.Expression): IOutputSchemaVerdict {
+  const read = literalToJson(explicit);
+  if (!read) {
+    return { reason: 'the explicit outputSchema option must be a JSON Schema object written as a literal in the decorator' };
+  }
+  return isObjectRootSchema(read.value)
+    ? { schema: read.value as Record<string, unknown> }
+    : { reason: `the explicit outputSchema option was refused: its root is not { "type": "object" }; ${OBJECT_ROOT_REASON}` };
+}
+
+/**
+ * The type of the `structuredContent` property of what a method returns (a Promise unwrapped,
+ * `undefined` removed), or why there is none worth a schema (`any`, `unknown`, `never`).
+ *
+ * @param method Method declaration.
+ * @param checker Program type checker.
+ * @returns The data type, or the reason no schema can be written.
+ */
+function structuredContentType(method: ts.MethodDeclaration, checker: ts.TypeChecker): { type: ts.Type } | { reason: string } {
+  const signature = checker.getSignatureFromDeclaration(method);
+  if (!signature) {
+    return { reason: 'its return type could not be resolved' };
+  }
+  const returned = checker.getReturnTypeOfSignature(signature);
+  const awaited = checker.getAwaitedType(returned) ?? returned;
+  const property = awaited.getProperty('structuredContent');
+  if (!property) {
+    return { reason: `its return type ${checker.typeToString(returned)} has no structuredContent` };
+  }
+  // Checked on the raw type: NonNullable<unknown> is {}, which would hide an unknown.
+  const declared = checker.getTypeOfSymbolAtLocation(property, method);
+  if (declared.flags & ts.TypeFlags.Any) {
+    return { reason: 'the type of its structuredContent is any; give the result type a concrete object type' };
+  }
+  if (declared.flags & ts.TypeFlags.Unknown) {
+    return { reason: 'the type of its structuredContent is unknown; give the result type a concrete object type' };
+  }
+  const type = checker.getNonNullableType(declared);
+  if (type.flags & ts.TypeFlags.Never) {
+    return { reason: 'the type of its structuredContent is never' };
+  }
+  return { type };
+}
+
+/**
+ * The verdict on a data type: its JSON Schema, unless it states no field (an empty object, an
+ * index signature only) or it is not an object.
+ *
+ * @param data The type of `structuredContent`.
+ * @param checker Program type checker.
+ * @returns The schema, or the reason none is written.
+ */
+function dataOutputSchema(data: ts.Type, checker: ts.TypeChecker): IOutputSchemaVerdict {
+  const dataName = checker.typeToString(data);
+  const isList = checker.isArrayType(data) || checker.isTupleType(data);
+  if (!isList && data.flags & ts.TypeFlags.Object && data.getProperties().length === 0) {
+    const kind = checker.getIndexInfosOfType(data).length > 0 ? 'an index signature only' : 'an empty object type';
+    return { reason: `the type of its structuredContent (${dataName}) is ${kind}, which states no field` };
   }
 
-  schema = normalizeRootObjectSchema(schema);
-
-  // An optional-marker parameter (`params?: IFoo`) means every property is
-  // optional at the boundary — the whole payload is optional, so no root
-  // property can be required. A default initializer (`params: IFoo = {}`) is
-  // NOT treated the same: the caller still passes an IFoo, so required is
-  // preserved (matches the "unchanged behaviour" acceptance criterion).
-  if (firstParam.questionToken && 'required' in schema) {
-    const { required: _required, ...rest } = schema;
-    schema = rest;
+  let refused = false;
+  // The recursive types of the data are defined under the root's $defs.
+  const schema = withDefinitions(checker, () => {
+    const converted: Record<string, unknown> = typeToJsonSchemaFromType(data, checker, new Set());
+    if (isObjectRootSchema(converted)) {
+      return converted;
+    }
+    const branches = Array.isArray(converted.anyOf) ? converted.anyOf : [];
+    if (branches.length > 0 && branches.every(isObjectRootSchema)) {
+      return mergeObjectSchemaBranches(branches as Record<string, unknown>[]);
+    }
+    refused = true;
+    return converted;
+  });
+  if (!refused) {
+    return { schema };
   }
+  const what = isList ? 'not an object but a list' : 'not an object';
+  return { reason: `the type of its structuredContent (${dataName}) is ${what}; ${OBJECT_ROOT_REASON}` };
+}
 
-  return schema;
+/**
+ * Apply an outputSchema verdict to a scanned tool: set the schema, or — for a tool published over
+ * MCP — report why none was written.
+ *
+ * @param tool Scanned tool being built.
+ * @param verdict What {@link extractOutputSchema} concluded.
+ * @param diagnostics Accumulator for scan diagnostics.
+ */
+function applyOutputSchema(tool: IScannedTool, verdict: IOutputSchemaVerdict, diagnostics: string[]): void {
+  if ('schema' in verdict) {
+    tool.outputSchema = verdict.schema;
+  } else if (tool.transports.includes('mcp')) {
+    diagnostics.push(`${tool.name}: no outputSchema written — ${verdict.reason}.`);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -964,9 +1605,10 @@ function visitNode(
           const canBeReferencedInPrompt = getBooleanProperty(exposeArgsObj, 'canBeReferencedInPrompt') ?? true;
           const transports = normalizeTransports(getStringArrayProperty(exposeArgsObj, 'transports'), defaultTransport);
           const mcpServers = getStringArrayProperty(exposeArgsObj, 'mcpServers');
+          const annotations = readAnnotationsOption(exposeArgsObj, name, diagnostics);
           const inputSchema = extractInputSchema(member, checker);
 
-          tools.push({
+          const scanned: IScannedTool = {
             name,
             displayName,
             modelDescription,
@@ -976,7 +1618,14 @@ function visitNode(
             inputSchema,
             transports,
             ...(mcpServers && mcpServers.length > 0 ? { mcpServers } : {}),
-          });
+            ...(annotations ? { annotations } : {}),
+          };
+          applyOutputSchema(
+            scanned,
+            extractOutputSchema(member, checker, getPropertyInitializer(exposeArgsObj, 'outputSchema')),
+            diagnostics,
+          );
+          tools.push(scanned);
           continue;
         }
 
@@ -996,9 +1645,10 @@ function visitNode(
           const canBeReferencedInPrompt = getBooleanProperty(toolArgsObj, 'canBeReferencedInPrompt') ?? true;
           const transports = normalizeTransports(getStringArrayProperty(toolArgsObj, 'transports'), defaultTransport);
           const mcpServers = getStringArrayProperty(toolArgsObj, 'mcpServers');
+          const annotations = readAnnotationsOption(toolArgsObj, name, diagnostics);
           const inputSchema = extractInputSchema(member, checker);
 
-          tools.push({
+          const scanned: IScannedTool = {
             name,
             displayName,
             modelDescription,
@@ -1008,7 +1658,14 @@ function visitNode(
             inputSchema,
             transports,
             ...(mcpServers && mcpServers.length > 0 ? { mcpServers } : {}),
-          });
+            ...(annotations ? { annotations } : {}),
+          };
+          applyOutputSchema(
+            scanned,
+            extractOutputSchema(member, checker, getPropertyInitializer(toolArgsObj, 'outputSchema')),
+            diagnostics,
+          );
+          tools.push(scanned);
         }
       }
     }

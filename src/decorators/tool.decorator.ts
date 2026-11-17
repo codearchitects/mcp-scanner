@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import type { IToolAnnotations } from './expose-tool.decorator';
 
 /* ------------------------------------------------------------------ */
 /*  Metadata key used to store non-exposed tool definitions on methods */
@@ -49,6 +50,19 @@ export interface IToolOptions {
    * manifest file. When omitted, the tool falls into the default MCP server group.
    */
   mcpServers?: string[];
+  /**
+   * MCP tool annotations — behaviour hints for clients, in the shape of the MCP TypeScript SDK's
+   * `registerTool` config. Written as is into the MCP manifest entry; when omitted no annotation is
+   * written, and a client applies the MCP defaults (e.g. not read-only).
+   */
+  annotations?: IToolAnnotations;
+  /**
+   * Explicit JSON Schema of the tool's structured result (MCP `outputSchema`), written as a JSON
+   * literal. It overrides the schema the scanner derives from the type of the `structuredContent`
+   * property of the method's return type. Its root must be `{ type: 'object' }`, which every MCP
+   * version accepts.
+   */
+  outputSchema?: Record<string, unknown>;
 }
 
 /**

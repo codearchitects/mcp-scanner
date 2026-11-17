@@ -10,6 +10,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import type { IToolAnnotations } from './decorators';
 import type { IScannedTool } from './scanner';
 
 /* ------------------------------------------------------------------ */
@@ -64,6 +65,18 @@ export interface IMcpManifestTool {
    * JSON Schema describing tool input (native MCP `inputSchema` format).
    */
   inputSchema: Record<string, unknown>;
+
+  /**
+   * JSON Schema of the tool's structured result (native MCP `outputSchema` format), present only
+   * when the scanner could state it truthfully. Its root is always `{ "type": "object" }`, which
+   * every MCP version accepts.
+   */
+  outputSchema?: Record<string, unknown>;
+
+  /**
+   * MCP tool annotations (`ToolAnnotations`), present only when the tool states any.
+   */
+  annotations?: IToolAnnotations;
 
   /**
    * Optional tool tags used for grouping/filtering.
@@ -209,6 +222,31 @@ export function assertValidMcpInputSchemas(tools: IScannedTool[]): void {
 }
 
 /**
+ * Assert every tool's `outputSchema`, when it has one, has an object root.
+ *
+ * MCP 2025-11-25 and earlier type `structuredContent` and the `outputSchema` root as a JSON object;
+ * MCP 2026-07-28 allows any JSON value. An object root is valid in every version, so it is the only
+ * root accepted. A tool with no `outputSchema` passes: the schema is optional in MCP.
+ *
+ * @param tools Scanned tools bound for a manifest.
+ * @throws When any tool's `outputSchema` root is not `{ "type": "object", ... }`.
+ */
+export function assertValidMcpOutputSchemas(tools: IScannedTool[]): void {
+  for (const tool of tools) {
+    const schema = tool.outputSchema;
+    if (schema === undefined) {
+      continue;
+    }
+    if (typeof schema !== 'object' || schema === null || Array.isArray(schema) || schema.type !== 'object') {
+      throw new Error(
+        `Invalid MCP outputSchema for tool '${tool.name}': root must be { "type": "object", ... }, got ${JSON.stringify(schema)}. ` +
+          `An object root is valid in every MCP version (2025-11-25 and earlier require it).`,
+      );
+    }
+  }
+}
+
+/**
  * Project a scanned tool into a manifest tool entry.
  *
  * @param tool Scanned tool.
@@ -222,6 +260,8 @@ function toManifestTool(tool: IScannedTool): IMcpManifestTool {
     icon: tool.icon,
     canBeReferencedInPrompt: tool.canBeReferencedInPrompt,
     inputSchema: tool.inputSchema,
+    ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
+    ...(tool.annotations ? { annotations: tool.annotations } : {}),
     ...(tool.tags && tool.tags.length > 0 ? { tags: tool.tags } : {}),
   };
 }
@@ -238,12 +278,15 @@ export function serializeMcpManifest(
   serverName: string = DEFAULT_MCP_SERVER_GROUP,
 ): string {
   assertValidMcpInputSchemas(tools);
+  assertValidMcpOutputSchemas(tools);
   const manifest: IMcpManifest = {
     version: 1,
     server: serverName,
     tools: tools.map(toManifestTool),
   };
-  return `${JSON.stringify(manifest, null, 2)}\n`;
+  // Every text with Unix line endings, wherever it came from: the manifest must be the same
+  // whatever system scans the sources.
+  return `${JSON.stringify(manifest, (_key, value: unknown) => (typeof value === 'string' ? value.replace(/\r\n?/g, '\n') : value), 2)}\n`;
 }
 
 /* ------------------------------------------------------------------ */

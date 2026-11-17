@@ -15,7 +15,7 @@
  */
 // Decorator
 export { ExposeTool, getExposedTools, Tool, getTools } from './decorators';
-export type { IExposeToolEntry, IExposeToolOptions, IToolEntry, IToolOptions } from './decorators';
+export type { IExposeToolEntry, IExposeToolOptions, IToolAnnotations, IToolEntry, IToolOptions } from './decorators';
 
 /**
  * Scanner exports.
@@ -39,6 +39,7 @@ export {
   DEFAULT_MCP_SERVER_GROUP,
   MCP_MANIFEST_FILE,
   assertValidMcpInputSchemas,
+  assertValidMcpOutputSchemas,
   groupMcpToolsByServer,
   mcpServerGroupsOf,
   readMcpManifestFile,

@@ -320,5 +320,28 @@ ${METHODS_MARKER_END}
     // Method should have default signature
     expect(content).toContain('public async run(params: ILocal): Promise<ILocal>');
   });
+
+  it('writes an explicit outputSchema into the @Tool of the default scaffold, as a JSON literal', () => {
+    const defaultScaffold = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'templates', 'proxy-scaffold.ejs'), 'utf-8');
+    const outputSchema = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] };
+
+    const rendered = renderProxyFileFromScaffoldTemplate([
+      { ...buildMethod('/tmp/source.ts'), toolOptions: { name: 'typedTool', displayName: 'Typed', modelDescription: 'Typed', outputSchema } },
+    ], defaultScaffold, 'MyProxy');
+
+    expect(rendered).toContain(`outputSchema: ${JSON.stringify(outputSchema)},`);
+  });
+
+  it('writes the annotations option into the @Tool of the default scaffold, as a JSON literal', () => {
+    const defaultScaffold = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'templates', 'proxy-scaffold.ejs'), 'utf-8');
+
+    const rendered = renderProxyFileFromScaffoldTemplate([
+      { ...buildMethod('/tmp/source.ts'), toolOptions: { name: 'reader', displayName: 'Reader', modelDescription: 'Reads', annotations: { readOnlyHint: true } } },
+      { ...buildMethod('/tmp/source.ts'), methodName: 'write', toolOptions: { name: 'writer', displayName: 'Writer', modelDescription: 'Writes', annotations: { readOnlyHint: false } } },
+    ], defaultScaffold, 'MyProxy');
+
+    expect(rendered).toContain('annotations: {"readOnlyHint":true},');
+    expect(rendered).toContain('annotations: {"readOnlyHint":false},');
+  });
 });
 
